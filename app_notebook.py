@@ -112,6 +112,12 @@ else:
         tabela_live = st.empty()
 
     def rodar_validacao():
+        col_antigo_name = col_antigo
+        col_novo_name = col_novo
+
+        df_input['Status Validação'] = 'Não Testado'
+        df_input['Observação Validação'] = '-'
+
         total_rows = len(df_input)
         if "100%" in modo_validacao:
             indices = list(range(total_rows))
@@ -140,7 +146,7 @@ else:
         wait = WebDriverWait(driver, 20)
 
         try:
-            # 1. LOGIN AUTOMÁTICO NA NOVA ROTA DO TRUSTVOX (/auth/login)
+            # 1. LOGIN AUTOMÁTICO NA ROTA /auth/login
             status_box.warning("🔑 Efetuando login no Trustvox...")
             driver.get("https://app.trustvox.com.br/auth/login")
             time.sleep(3)
@@ -166,7 +172,6 @@ else:
             except Exception as login_err:
                 status_box.error(f"Erro no envio das credenciais: {str(login_err)}")
 
-            # Valida se o login realmente passou
             url_pos_login = driver.current_url
             if "login" in url_pos_login or "sign_in" in url_pos_login:
                 status_box.error("❌ Falha na autenticação do Trustvox! Verifique se o e-mail e a senha digitados estão corretos.")
@@ -176,10 +181,10 @@ else:
             status_box.info(f"🚀 **Login concluído com sucesso! Analisando {len(indices)} produtos...**")
 
             for cont, idx in enumerate(indices, start=1):
-                val_raw = df_input.at[idx, col_antigo]
+                val_raw = df_input.at[idx, col_antigo_name]
                 cod_antigo = str(int(val_raw)).strip() if pd.notna(val_raw) and isinstance(val_raw, (int, float)) else str(val_raw).strip() if pd.notna(val_raw) else ""
 
-                val_novo_raw = df_input.at[idx, col_novo]
+                val_novo_raw = df_input.at[idx, col_novo_name]
                 cod_novo = str(int(val_novo_raw)).strip() if pd.notna(val_novo_raw) and isinstance(val_novo_raw, (int, float)) else str(val_novo_raw).strip() if pd.notna(val_novo_raw) else ""
 
                 linha_excel = idx + 2
@@ -190,7 +195,6 @@ else:
                     driver.get(url_loja)
                     time.sleep(4)
 
-                    # Verifica se foi deslogado no meio do processo
                     if "login" in driver.current_url or "sign_in" in driver.current_url:
                         raise Exception(f"Sessão expirada ou deslogada. URL: {driver.current_url}")
 
@@ -219,7 +223,7 @@ else:
                     
                     time.sleep(2)
 
-                    # Passo 2: Clica na opção 'Código do Produto'
+                    # Passo 2: Clica em 'Código do Produto'
                     try:
                         opcao_elem = wait.until(EC.element_to_be_clickable((By.XPATH, "//*[contains(text(),'Código do Produto')]")))
                         driver.execute_script("arguments[0].click();", opcao_elem)
@@ -364,7 +368,11 @@ else:
     if btn_iniciar:
         with st.spinner("Conectando ao servidor e processando..."):
             df_final = rodar_validacao()
-            status_box.success("🎉 Validação concluída com sucesso!")
+            
+            # Garante que não haverá KeyError caso o fluxo seja interrompido
+            cols_exibicao = [c for c in ['Status Validação', col_antigo, col_novo, 'Observação Validação'] if c in df_final.columns]
+
+            status_box.success("🎉 Processamento finalizado!")
 
             nome_saida = f"relatorio_{slug_empresa}_validado.xlsx"
             df_final.to_excel(nome_saida, index=False)
@@ -379,6 +387,6 @@ else:
                 )
             
             tabela_live.dataframe(
-                df_final[['Status Validação', col_antigo, col_novo, 'Observação Validação']],
+                df_final[cols_exibicao],
                 use_container_width=True
             )

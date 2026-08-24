@@ -159,7 +159,7 @@ else:
         wait = WebDriverWait(driver, 20)
 
         try:
-            # 1. LOGIN AUTOMÁTICO NA ROTA /auth/login
+            # 1. LOGIN AUTOMÁTICO
             status_box.warning("🔑 Efetuando login no Trustvox...")
             driver.get("https://app.trustvox.com.br/auth/login")
             time.sleep(3)
@@ -177,17 +177,28 @@ else:
                 pass_field.clear()
                 pass_field.send_keys(senha_trustvox)
 
-                submit_btn = driver.find_element(
-                    By.CSS_SELECTOR, "button[type='submit'], input[type='submit'], button:has-text('Entrar'), button:has-text('Login')"
-                )
-                driver.execute_script("arguments[0].click();", submit_btn)
+                # Clica no botão de login via JS nativo
+                clicou_submit = driver.execute_script("""
+                    let btns = Array.from(document.querySelectorAll('button, input[type="submit"]'));
+                    let btn = btns.find(b => b.type === 'submit' || (b.innerText && (b.innerText.toLowerCase().includes('entrar') || b.innerText.toLowerCase().includes('login'))));
+                    if (btn) { btn.click(); return true; }
+                    return false;
+                """)
+                if not clicou_submit:
+                    driver.find_element(By.CSS_SELECTOR, "button[type='submit'], input[type='submit']").click()
+                
                 time.sleep(6)
             except Exception as login_err:
-                status_box.error(f"Erro no envio das credenciais: {str(login_err)}")
+                log_box.error(f"Erro ao preencher tela de login: {str(login_err)}")
+
+            # Tenta navegar diretamente para a página de produtos para validar se a sessão do cookie foi criada
+            driver.get(url_loja)
+            time.sleep(4)
 
             url_pos_login = driver.current_url
             if "login" in url_pos_login or "sign_in" in url_pos_login:
-                status_box.error("❌ Falha na autenticação do Trustvox! Verifique se o e-mail e a senha digitados estão corretos.")
+                status_box.error("❌ Falha na autenticação do Trustvox! Verifique o e-mail e a senha informados na barra lateral.")
+                log_box.error("O Trustvox recusou o login e redirecionou de volta para a tela de autenticação.")
                 driver.quit()
                 return df_input
 
@@ -209,7 +220,7 @@ else:
                     time.sleep(4)
 
                     if "login" in driver.current_url or "sign_in" in driver.current_url:
-                        raise Exception(f"Sessão expirada ou deslogada. URL: {driver.current_url}")
+                        raise Exception(f"Sessão expirada. URL: {driver.current_url}")
 
                     # Passo 1: Clica no botão 'Filtrar'
                     btn_filtrar_encontrado = False
@@ -382,7 +393,6 @@ else:
         with st.spinner("Conectando ao servidor e processando..."):
             df_final = rodar_validacao()
             
-            # Garante colunas únicas e sem duplicidades para renderização no PyArrow
             cols_desejadas = ['Status Validação', col_antigo, col_novo, 'Observação Validação']
             cols_exibicao = []
             for c in cols_desejadas:
@@ -407,3 +417,4 @@ else:
                 df_final[cols_exibicao],
                 use_container_width=True
             )
+        

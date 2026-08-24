@@ -44,7 +44,7 @@ with st.sidebar:
     proxy_server = st.text_input(
         "Servidor Proxy (IP:Porta ou user:pass@IP:Porta):",
         placeholder="ex: mxjcpfer:f080q5vj4ys9@198.23.243.226:6361",
-        help="Insira no formato usuario:senha@IP:Porta ou use o IP direto caso tenha ativado IP Authorization"
+        help="Insira o proxy residencial para bypass de nuvem"
     ).strip()
 
     st.divider()
@@ -82,7 +82,7 @@ else:
     else:
         df_input = pd.read_excel(arquivo_enviado)
 
-    # Renomeia colunas duplicadas automaticamente no pandas
+    # Trata colunas duplicadas
     cols_unicas = []
     counts = {}
     for col in df_input.columns:
@@ -181,14 +181,14 @@ else:
         wait = WebDriverWait(driver, 20)
 
         try:
-            status_box.warning("🔑 Conectando ao formulário de autenticação...")
+            status_box.warning("🔑 Autenticando no Trustvox...")
             try:
                 driver.get("https://app.trustvox.com.br/auth/login")
             except Exception as nav_err:
-                status_box.error("❌ Falha de conexão na navegação. Verifique o servidor de Proxy informado.")
-                log_box.error(f"Erro de rede/proxy: {str(nav_err).split('\n')[0]}")
+                status_box.error("❌ Falha de conexão na navegação. Verifique o Proxy.")
+                log_box.error(f"Erro de rede: {str(nav_err).split('\n')[0]}")
                 df_input['Status Validação'] = 'REPROVADO'
-                df_input['Observação Validação'] = 'Falha de conexão com a URL (Proxy inativo ou bloqueado)'
+                df_input['Observação Validação'] = 'Falha de conexão com a URL'
                 driver.quit()
                 return df_input
 
@@ -215,7 +215,7 @@ else:
             url_pos = driver.current_url
             if "sign_in" in url_pos or "login" in url_pos:
                 status_box.error(f"❌ Sessão negada pelo servidor. URL retornado: {url_pos}")
-                log_box.error(f"O servidor redirecionou a conexão para: {url_pos}")
+                log_box.error(f"Redirecionado para: {url_pos}")
                 df_input['Status Validação'] = 'REPROVADO'
                 df_input['Observação Validação'] = f'Bloqueio de IP/Sessão na nuvem ({url_pos})'
                 driver.quit()
@@ -238,61 +238,45 @@ else:
                     driver.get(url_loja)
                     time.sleep(4)
 
-                    # Busca avançada pelo botão/ação de Filtro
-                    btn_filtrar_encontrado = False
-                    for _ in range(3):
-                        clicou = driver.execute_script("""
-                            let elements = Array.from(document.querySelectorAll('button, a, div[role="button"], span'));
-                            let btn = elements.find(el => {
-                                let txt = (el.innerText || el.textContent || '').strip().toLowerCase();
-                                return txt === 'filtrar' || txt === 'filtro' || txt.includes('filtrar') || el.getAttribute('aria-label') === 'Filtrar';
-                            });
-                            if (btn) {
-                                btn.click();
-                                return true;
-                            }
-                            return false;
-                        """)
-                        if clicou:
-                            btn_filtrar_encontrado = True
-                            break
-                        time.sleep(2)
+                    # STEP 1: Clica no botão "Filtrar"
+                    clicou_filtrar = driver.execute_script("""
+                        let btns = Array.from(document.querySelectorAll('button, div, span, a'));
+                        let b = btns.find(x => x.innerText && x.innerText.trim().toLowerCase() === 'filtrar');
+                        if (b) {
+                            b.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+                            return true;
+                        }
+                        return false;
+                    """)
 
-                    if not btn_filtrar_encontrado:
-                        # Tenta submeter o valor diretamente nos inputs visíveis de busca
-                        preencheu_direto = driver.execute_script("""
-                            let val = arguments[0];
-                            let inputs = Array.from(document.querySelectorAll('input[type="search"], input[placeholder*="Buscar"], input[placeholder*="Filtrar"], input[type="text"]'));
-                            let input = inputs.find(i => i.offsetParent !== null && !i.closest('header'));
-                            if (input) {
-                                let setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-                                setter.call(input, val);
-                                input.dispatchEvent(new Event('input', { bubbles: true }));
-                                input.dispatchEvent(new Event('change', { bubbles: true }));
-                                input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
-                                return true;
-                            }
-                            return false;
-                        """, cod_antigo)
-                        if not preencheu_direto:
-                            raise Exception("Botão 'Filtrar' ou campo de busca não localizado na interface.")
+                    if not clicou_filtrar:
+                        raise Exception("Botão 'Filtrar' não localizado no topo da página.")
 
                     time.sleep(2)
 
-                    # Seleciona 'Código do Produto' se o menu abriu
-                    driver.execute_script("""
-                        let els = Array.from(document.querySelectorAll('div, span, li, p, a, button'));
-                        let el = els.find(x => x.children.length === 0 && x.innerText && x.innerText.trim().toLowerCase() === 'código do produto');
-                        if (el) el.click();
+                    # STEP 2: Clica em "Código do Produto" no popover
+                    clicou_opcao = driver.execute_script("""
+                        let elements = Array.from(document.querySelectorAll('div, span, li, p, a, button'));
+                        let el = elements.find(x => x.innerText && x.innerText.trim().toLowerCase().includes('código do produto'));
+                        if (el) {
+                            el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+                            return true;
+                        }
+                        return false;
                     """)
-                    time.sleep(1.5)
 
-                    # Preenche no modal de filtro
+                    if not clicou_opcao:
+                        raise Exception("Opção 'Código do Produto' não localizada no menu suspenso.")
+
+                    time.sleep(2)
+
+                    # STEP 3: Preenche o código antigo no input do card
                     preencheu = driver.execute_script("""
                         let val = arguments[0];
                         let inputs = Array.from(document.querySelectorAll('input'));
-                        let input = inputs.find(i => !i.closest('header') && i.type !== 'hidden' && i.offsetParent !== null);
+                        let input = inputs.find(i => i.offsetParent !== null && i.type !== 'hidden' && !i.closest('header'));
                         if (input) {
+                            input.focus();
                             let setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
                             setter.call(input, val);
                             input.dispatchEvent(new Event('input', { bubbles: true }));
@@ -302,23 +286,34 @@ else:
                         return false;
                     """, cod_antigo)
 
+                    if not preencheu:
+                        raise Exception("Campo de texto para digitar o código não encontrado no modal.")
+
                     time.sleep(1)
 
-                    # Confirma o filtro
-                    driver.execute_script("""
-                        let btns = Array.from(document.querySelectorAll('button, input[type="submit"]'));
-                        let b = btns.find(x => x.innerText && (x.innerText.trim().toLowerCase() === 'confirmar' || x.innerText.trim().toLowerCase() === 'buscar'));
-                        if (b) b.click();
+                    # STEP 4: Clica no botão azul "Confirmar"
+                    clicou_confirmar = driver.execute_script("""
+                        let btns = Array.from(document.querySelectorAll('button, input[type="submit"], a, div'));
+                        let b = btns.find(x => x.innerText && x.innerText.trim().toLowerCase() === 'confirmar');
+                        if (b) {
+                            b.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+                            return true;
+                        }
+                        return false;
                     """)
+
+                    if not clicou_confirmar:
+                        raise Exception("Botão 'Confirmar' não localizado no modal de filtro.")
+
                     time.sleep(4)
 
-                    # Clica na linha correspondente ao produto
+                    # STEP 5: Clica na linha da tabela contendo o código
                     clicou_linha = driver.execute_script("""
                         let code = arguments[0];
-                        let elements = Array.from(document.querySelectorAll('tbody tr, tr, div[class*="table"] div'));
+                        let elements = Array.from(document.querySelectorAll('tbody tr, tr'));
                         let target = elements.find(el => el.innerText && el.innerText.includes(code));
                         if (target) {
-                            target.click();
+                            target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
                             return true;
                         }
                         return false;
@@ -331,7 +326,10 @@ else:
                         clicou_link = driver.execute_script("""
                             let els = Array.from(document.querySelectorAll('a, button, span, div'));
                             let link = els.find(x => x.innerText && x.innerText.trim().toLowerCase().includes('link original'));
-                            if (link) { link.click(); return true; }
+                            if (link) {
+                                link.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+                                return true;
+                            }
                             return false;
                         """)
 

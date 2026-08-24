@@ -74,7 +74,7 @@ else:
     else:
         df_input = pd.read_excel(arquivo_enviado)
 
-    # Trata colunas duplicadas na planilha de origem
+    # Renomeia colunas duplicadas automaticamente
     cols_unicas = []
     counts = {}
     for col in df_input.columns:
@@ -102,7 +102,7 @@ else:
             col_novo = st.selectbox("Coluna CÓDIGO NOVO:", cols_lista, index=cols_lista.index(col_novo_default))
 
         st.markdown(f"**Empresa:** `{slug_empresa}` | **Arquivo:** `{arquivo_enviado.name}`")
-        btn_iniciar = st.button("🚀 Iniciar Processamento", type="primary", use_container_width=True)
+        btn_iniciar = st.button("🚀 Iniciar Processamento", type="primary", width="stretch")
         
         status_box = st.empty()
         progress_bar = st.progress(0)
@@ -148,6 +148,7 @@ else:
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
         options.add_argument("--disable-gpu")
+        options.add_argument("--ignore-certificate-errors")
         options.add_argument("--window-size=1920,1080")
         options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
 
@@ -156,42 +157,51 @@ else:
         except Exception:
             driver = webdriver.Chrome(options=options)
 
-        wait = WebDriverWait(driver, 20)
+        driver.set_page_load_timeout(45)
+        wait = WebDriverWait(driver, 25)
 
         try:
-            # 1. LOGIN AUTOMÁTICO NA ROTA /auth/login
-            status_box.warning("🔑 Efetuando login no Trustvox...")
-            driver.get("https://app.trustvox.com.br/auth/login")
-            time.sleep(3)
-
+            status_box.warning("🔑 Autenticando no Trustvox...")
             try:
-                email_field = wait.until(EC.presence_of_element_located((
-                    By.CSS_SELECTOR, "input[type='email'], input#user_email, input[name='email'], input[name='user[email]']"
-                )))
-                email_field.clear()
-                email_field.send_keys(usuario_trustvox)
-
-                pass_field = driver.find_element(
-                    By.CSS_SELECTOR, "input[type='password'], input#user_password, input[name='password'], input[name='user[password]']"
-                )
-                pass_field.clear()
-                pass_field.send_keys(senha_trustvox)
-
-                submit_btn = driver.find_element(
-                    By.CSS_SELECTOR, "button[type='submit'], input[type='submit'], button:has-text('Entrar'), button:has-text('Login')"
-                )
-                driver.execute_script("arguments[0].click();", submit_btn)
-                time.sleep(6)
-            except Exception as login_err:
-                status_box.error(f"Erro no envio das credenciais: {str(login_err)}")
-
-            url_pos_login = driver.current_url
-            if "login" in url_pos_login or "sign_in" in url_pos_login:
-                status_box.error("❌ Falha na autenticação do Trustvox! Verifique se o e-mail e a senha digitados estão corretos.")
+                driver.get("https://app.trustvox.com.br/auth/login")
+            except Exception as nav_err:
+                status_box.error("❌ Falha de conexão na navegação.")
+                log_box.error(f"Erro de rede: {str(nav_err).split('\n')[0]}")
+                df_input['Status Validação'] = 'REPROVADO'
+                df_input['Observação Validação'] = 'Falha de conexão com a URL'
                 driver.quit()
                 return df_input
 
-            status_box.info(f"🚀 **Login concluído com sucesso! Analisando {len(indices)} produtos...**")
+            time.sleep(3)
+
+            try:
+                email_elem = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "input[type='email'], input#user_email, input[name='user[email]']")))
+                pass_elem = driver.find_element(By.CSS_SELECTOR, "input[type='password'], input#user_password, input[name='user[password]']")
+
+                email_elem.clear()
+                email_elem.send_keys(usuario_trustvox)
+                pass_elem.clear()
+                pass_elem.send_keys(senha_trustvox)
+
+                btn_submit = driver.find_element(By.CSS_SELECTOR, "button[type='submit'], input[type='submit']")
+                driver.execute_script("arguments[0].click();", btn_submit)
+                time.sleep(5)
+            except Exception as login_err:
+                log_box.warning(f"Envio do formulário de login: {str(login_err)}")
+
+            driver.get(url_loja)
+            time.sleep(8)  # Tempo para renderização da SPA React
+
+            url_pos = driver.current_url
+            if "sign_in" in url_pos or "login" in url_pos:
+                status_box.error(f"❌ Sessão negada pelo servidor. URL retornado: {url_pos}")
+                log_box.error(f"Redirecionado para: {url_pos}")
+                df_input['Status Validação'] = 'REPROVADO'
+                df_input['Observação Validação'] = f'Bloqueio de IP/Sessão na nuvem ({url_pos})'
+                driver.quit()
+                return df_input
+
+            status_box.info(f"🚀 **Login verificado! Analisando {len(indices)} produtos...**")
 
             for cont, idx in enumerate(indices, start=1):
                 val_raw = df_input.at[idx, col_antigo_name]
@@ -205,60 +215,54 @@ else:
                 obs = ""
 
                 try:
-                    driver.get(url_loja)
-                    time.sleep(4)
+                    # Limpa qualquer filtro anterior se o botão existir
+                    driver.execute_script("""
+                        let cleanBtns = Array.from(document.querySelectorAll('button, a, span'));
+                        let cleanBtn = cleanBtns.find(x => x.innerText && x.innerText.trim().toLowerCase() === 'limpar');
+                        if (cleanBtn) cleanBtn.click();
+                    """)
+                    time.sleep(1)
 
-                    if "login" in driver.current_url or "sign_in" in driver.current_url:
-                        raise Exception(f"Sessão expirada ou deslogada. URL: {driver.current_url}")
-
-                    # Passo 1: Clica no botão 'Filtrar'
-                    btn_filtrar_encontrado = False
+                    # 1. Clica no botão "Filtrar"
+                    clicou_filtrar = False
                     for _ in range(3):
                         try:
                             btn_elem = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(.,'Filtrar') or contains(text(),'Filtrar')]")))
                             driver.execute_script("arguments[0].click();", btn_elem)
-                            btn_filtrar_encontrado = True
+                            clicou_filtrar = True
                             break
                         except Exception:
-                            clicou = driver.execute_script("""
-                                let btns = Array.from(document.querySelectorAll('button'));
-                                let b = btns.find(x => x.innerText && x.innerText.toLowerCase().includes('filtrar'));
-                                if (b) { b.click(); return true; }
+                            clicou_js = driver.execute_script("""
+                                let btns = Array.from(document.querySelectorAll('button, div[role="button"], a, span'));
+                                let b = btns.find(x => x.innerText && x.innerText.trim().toLowerCase() === 'filtrar');
+                                if (b) {
+                                    b.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+                                    return true;
+                                }
                                 return false;
                             """)
-                            if clicou:
-                                btn_filtrar_encontrado = True
+                            if clicou_js:
+                                clicou_filtrar = True
                                 break
                             time.sleep(2)
 
-                    if not btn_filtrar_encontrado:
-                        raise Exception(f"Botão 'Filtrar' não localizado. URL atual: {driver.current_url}")
-                    
-                    time.sleep(2)
+                    if not clicou_filtrar:
+                        raise Exception("Botão 'Filtrar' não renderizou a tempo.")
 
-                    # Passo 2: Clica em 'Código do Produto'
-                    try:
-                        opcao_elem = wait.until(EC.element_to_be_clickable((By.XPATH, "//*[contains(text(),'Código do Produto')]")))
-                        driver.execute_script("arguments[0].click();", opcao_elem)
-                    except Exception:
-                        clicou_op = driver.execute_script("""
-                            let els = Array.from(document.querySelectorAll('div, span, li, p, a'));
-                            let el = els.find(x => x.children.length === 0 && x.innerText && x.innerText.trim() === 'Código do Produto');
-                            if (el) { el.click(); return true; }
-                            return false;
-                        """)
-                        if not clicou_op:
-                            raise Exception("Opção 'Código do Produto' não foi localizada no menu suspenso.")
-                    
-                    time.sleep(2)
+                    time.sleep(1.5)
 
-                    # Passo 3: Preenche o código no popover
+                    # 2. Clica em "Código do Produto"
+                    opcao_codigo = wait.until(EC.element_to_be_clickable((
+                        By.XPATH, "//*[contains(text(),'Código do Produto')]"
+                    )))
+                    driver.execute_script("arguments[0].click();", opcao_codigo)
+                    time.sleep(1.5)
+
+                    # 3. Preenche o código antigo no input do modal
                     preencheu = driver.execute_script("""
                         let val = arguments[0];
                         let inputs = Array.from(document.querySelectorAll('input'));
-                        let input = inputs.find(i => !i.closest('header') && i.type !== 'hidden' && i.offsetParent !== null);
-                        if (!input) input = inputs.find(i => !i.closest('header') && i.type === 'text');
-                        
+                        let input = inputs.find(i => i.offsetParent !== null && i.type !== 'hidden' && !i.closest('header'));
                         if (input) {
                             input.focus();
                             let setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
@@ -271,59 +275,52 @@ else:
                     """, cod_antigo)
 
                     if not preencheu:
-                        raise Exception("Campo de texto do popover de filtro não foi localizado.")
+                        raise Exception("Campo de busca do código não localizado.")
+
                     time.sleep(1)
 
-                    # Passo 4: Clica em 'Confirmar'
-                    try:
-                        btn_conf_elem = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(.,'Confirmar') or contains(text(),'Confirmar')]")))
-                        driver.execute_script("arguments[0].click();", btn_conf_elem)
-                    except Exception:
-                        clicou_c = driver.execute_script("""
-                            let btns = Array.from(document.querySelectorAll('button'));
-                            let b = btns.find(x => x.innerText && x.innerText.trim() === 'Confirmar');
-                            if (b) { b.click(); return true; }
-                            return false;
-                        """)
-                        if not clicou_c:
-                            raise Exception("Botão 'Confirmar' não localizado no modal de filtro.")
-                    
-                    time.sleep(4.5)
+                    # 4. Clica no botão azul "Confirmar"
+                    btn_confirmar = wait.until(EC.element_to_be_clickable((
+                        By.XPATH, "//button[contains(.,'Confirmar') or contains(text(),'Confirmar')]"
+                    )))
+                    driver.execute_script("arguments[0].click();", btn_confirmar)
+                    time.sleep(3.5)
 
-                    # Passo 5: Clica na linha do produto filtrado
+                    # 5. Clica na linha correspondente da tabela
                     clicou_linha = driver.execute_script("""
                         let code = arguments[0];
-                        let elements = Array.from(document.querySelectorAll('tbody tr, tr, div[class*="table"] div'));
+                        let elements = Array.from(document.querySelectorAll('tbody tr, tr'));
                         let target = elements.find(el => el.innerText && el.innerText.includes(code));
                         if (target) {
-                            target.click();
+                            target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
                             return true;
                         }
                         return false;
                     """, cod_antigo)
 
                     if clicou_linha:
-                        time.sleep(3)
+                        time.sleep(2.5)
 
-                        # Passo 6: Clica em 'Link original'
                         handles_antes = driver.window_handles
                         clicou_link = driver.execute_script("""
                             let els = Array.from(document.querySelectorAll('a, button, span, div'));
-                            let link = els.find(x => x.innerText && x.innerText.trim().includes('Link original'));
-                            if (link) { link.click(); return true; }
+                            let link = els.find(x => x.innerText && x.innerText.trim().toLowerCase().includes('link original'));
+                            if (link) {
+                                link.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+                                return true;
+                            }
                             return false;
                         """)
-                        
+
                         if not clicou_link:
-                            raise Exception("Botão 'Link original' não encontrado na gaveta do produto.")
-                            
-                        time.sleep(4)
+                            raise Exception("Botão 'Link original' não localizado na gaveta do produto.")
+
+                        time.sleep(3.5)
                         handles_depois = driver.window_handles
 
-                        # Passo 7: Validação do _productId
                         if len(handles_depois) > len(handles_antes):
                             driver.switch_to.window(handles_depois[-1])
-                            time.sleep(4)
+                            time.sleep(3.5)
 
                             product_id_console = driver.execute_script("""
                                 if (window._trustvox && Array.isArray(window._trustvox)) {
@@ -350,7 +347,7 @@ else:
                             else:
                                 obs = f"Esperado: {cod_novo} | Retornado: {product_id_console}"
                         else:
-                            obs = "Aba do site original não abriu."
+                            obs = "Aba externa do site não abriu."
                     else:
                         obs = f"Produto {cod_antigo} não encontrado na tabela pós-filtro"
 
@@ -382,7 +379,6 @@ else:
         with st.spinner("Conectando ao servidor e processando..."):
             df_final = rodar_validacao()
             
-            # Garante colunas únicas e sem duplicidades para renderização no PyArrow
             cols_desejadas = ['Status Validação', col_antigo, col_novo, 'Observação Validação']
             cols_exibicao = []
             for c in cols_desejadas:
@@ -400,10 +396,11 @@ else:
                     data=file,
                     file_name=nome_saida,
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True
+                    width="stretch"
                 )
             
+            df_display = df_final.loc[:, ~df_final.columns.duplicated()][cols_exibicao]
             tabela_live.dataframe(
-                df_final[cols_exibicao],
-                use_container_width=True
+                df_display,
+                width="stretch"
             )

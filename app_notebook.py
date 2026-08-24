@@ -159,45 +159,51 @@ else:
         wait = WebDriverWait(driver, 20)
 
         try:
-            # 1. LOGIN AUTOMÁTICO
+            # 1. AUTENTICAÇÃO COMPATÍVEL COM REACT SPA INJETANDO ESTADO NATIVO
             status_box.warning("🔑 Efetuando login no Trustvox...")
             driver.get("https://app.trustvox.com.br/auth/login")
             time.sleep(3)
 
             try:
-                email_field = wait.until(EC.presence_of_element_located((
-                    By.CSS_SELECTOR, "input[type='email'], input#user_email, input[name='email'], input[name='user[email]']"
-                )))
-                email_field.clear()
-                email_field.send_keys(usuario_trustvox)
+                # Preenchimento de Email e Senha com disparo de eventos React
+                driver.execute_script("""
+                    function setReactInputValue(input, value) {
+                        let nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                        nativeInputValueSetter.call(input, value);
+                        input.dispatchEvent(new Event('input', { bubbles: true }));
+                        input.dispatchEvent(new Event('change', { bubbles: true }));
+                    }
 
-                pass_field = driver.find_element(
-                    By.CSS_SELECTOR, "input[type='password'], input#user_password, input[name='password'], input[name='user[password]']"
-                )
-                pass_field.clear()
-                pass_field.send_keys(senha_trustvox)
+                    let emailInput = document.querySelector("input[type='email'], input#user_email, input[name='email'], input[name='user[email]']");
+                    let passInput = document.querySelector("input[type='password'], input#user_password, input[name='password'], input[name='user[password]']");
 
-                # Clica no botão de login via JS nativo
-                clicou_submit = driver.execute_script("""
-                    let btns = Array.from(document.querySelectorAll('button, input[type="submit"]'));
-                    let btn = btns.find(b => b.type === 'submit' || (b.innerText && (b.innerText.toLowerCase().includes('entrar') || b.innerText.toLowerCase().includes('login'))));
-                    if (btn) { btn.click(); return true; }
-                    return false;
+                    if (emailInput) setReactInputValue(emailInput, arguments[0]);
+                    if (passInput) setReactInputValue(passInput, arguments[1]);
+                """, usuario_trustvox, senha_trustvox)
+
+                time.sleep(1)
+
+                # Dispara clique no botão ou submete o formulário
+                driver.execute_script("""
+                    let form = document.querySelector('form');
+                    let btn = document.querySelector('button[type="submit"], input[type="submit"]');
+                    if (btn) {
+                        btn.click();
+                    } else if (form) {
+                        form.submit();
+                    }
                 """)
-                if not clicou_submit:
-                    driver.find_element(By.CSS_SELECTOR, "button[type='submit'], input[type='submit']").click()
-                
                 time.sleep(6)
             except Exception as login_err:
                 log_box.error(f"Erro ao preencher tela de login: {str(login_err)}")
 
-            # Tenta navegar diretamente para a página de produtos para validar se a sessão do cookie foi criada
+            # Valida sessão acessando a loja diretamente
             driver.get(url_loja)
             time.sleep(4)
 
             url_pos_login = driver.current_url
             if "login" in url_pos_login or "sign_in" in url_pos_login:
-                status_box.error("❌ Falha na autenticação do Trustvox! Verifique o e-mail e a senha informados na barra lateral.")
+                status_box.error("❌ Falha na autenticação do Trustvox! Verifique se o e-mail e a senha digitados estão corretos na barra lateral.")
                 log_box.error("O Trustvox recusou o login e redirecionou de volta para a tela de autenticação.")
                 driver.quit()
                 return df_input
@@ -417,4 +423,3 @@ else:
                 df_final[cols_exibicao],
                 use_container_width=True
             )
-        

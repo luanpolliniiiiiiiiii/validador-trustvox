@@ -10,7 +10,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
 from webdriver_manager.core.os_manager import ChromeType
 
-# Configuração da página estilo NotebookLM Studio
+
 st.set_page_config(
     page_title="Trustvox Studio | NotebookLM Style",
     page_icon="📚",
@@ -31,9 +31,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ---------------------------------------------------------
-# PAINEL ESQUERDO (SIDEBAR)
-# ---------------------------------------------------------
+
 with st.sidebar:
     st.title("🔑 Acesso ao Trustvox")
     usuario_trustvox = st.text_input("E-mail do Trustvox:", placeholder="seu-email@empresa.com")
@@ -60,11 +58,9 @@ with st.sidebar:
         index=0
     )
 
-# ---------------------------------------------------------
-# CORPO PRINCIPAL
-# ---------------------------------------------------------
+
 st.title("🛡️ Trustvox Migration Studio")
-st.caption("Validação automática de migração de produtos via Injeção de JS")
+st.caption("Validação automática de migração de produtos via busca direta por URL")
 
 if arquivo_enviado is None or not slug_empresa or not usuario_trustvox or not senha_trustvox:
     st.info("👈 **Para começar:** Preencha o e-mail, a senha, o slug da empresa e suba a planilha na barra lateral.")
@@ -122,7 +118,6 @@ else:
 
         aprovados_count = 0
         reprovados_count = 0
-        url_loja = f"https://app.trustvox.com.br/{slug_empresa}/products"
 
         options = webdriver.ChromeOptions()
         options.add_argument("--headless=new")
@@ -179,73 +174,36 @@ else:
                 obs = ""
 
                 try:
-                    driver.get(url_loja)
-                    time.sleep(3.5)
+                    # BUSCA DIRETA PELA URL COM O CÓDIGO (Sem usar pop-ups)
+                    url_busca = f"https://app.trustvox.com.br/{slug_empresa}/products?code={cod_antigo}"
+                    driver.get(url_busca)
+                    time.sleep(3)
 
-                    # INJEÇÃO JS 1: Botão Filtrar
-                    driver.execute_script("""
-                        let btns = Array.from(document.querySelectorAll('button'));
-                        let b = btns.find(x => x.innerText && x.innerText.includes('Filtrar'));
-                        if (b) b.click();
-                    """)
-                    time.sleep(1.5)
-
-                    # INJEÇÃO JS 2: Botão Código do Produto
-                    driver.execute_script("""
-                        let els = Array.from(document.querySelectorAll('*'));
-                        let el = els.find(x => x.children.length === 0 && x.innerText && x.innerText.includes('Código do Produto'));
-                        if (el) el.click();
-                    """)
-                    time.sleep(1.5)
-
-                    # INJEÇÃO JS 3: Input do Modal (Forçando atualização no Framework React)
-                    preencheu = driver.execute_script("""
-                        let inputs = Array.from(document.querySelectorAll('input'));
-                        let modalInput = inputs.find(i => i.closest('[class*="popover"], [class*="modal"], [role="dialog"], [class*="menu"], [class*="filter"]'));
-                        if (!modalInput) modalInput = inputs.find(i => !i.closest('header') && i.type === 'text');
-                        
-                        if (modalInput) {
-                            let setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
-                            setter.call(modalInput, arguments[0]);
-                            modalInput.dispatchEvent(new Event('input', { bubbles: true }));
-                            modalInput.dispatchEvent(new Event('change', { bubbles: true }));
-                            return true;
-                        }
-                        return false;
-                    """, cod_antigo)
-
-                    if not preencheu:
-                        raise Exception("Input do pop-up não localizado pela injeção JS.")
-                    time.sleep(1)
-
-                    # INJEÇÃO JS 4: Botão Confirmar
-                    driver.execute_script("""
-                        let btns = Array.from(document.querySelectorAll('button'));
-                        let b = btns.find(x => x.innerText && x.innerText.includes('Confirmar'));
-                        if (b) b.click();
-                    """)
-                    time.sleep(4)
-
-                    # 5. Localizar linha na tabela
+                    # Localiza a linha do produto retornado na tabela
                     linhas = driver.find_elements(By.XPATH, f"//tr[contains(.,'{cod_antigo}')]")
+                    
+                    if not linhas:
+                        # Tentativa com busca geral caso a URL com ?code exija formato diferente
+                        url_busca_alt = f"https://app.trustvox.com.br/{slug_empresa}/products?query={cod_antigo}"
+                        driver.get(url_busca_alt)
+                        time.sleep(3)
+                        linhas = driver.find_elements(By.XPATH, f"//tr[contains(.,'{cod_antigo}')]")
+
                     if linhas:
                         driver.execute_script("arguments[0].click();", linhas[0])
-                        time.sleep(3)
+                        time.sleep(2.5)
 
-                        # INJEÇÃO JS 5: Link Original
+                        
                         handles_antes = driver.window_handles
                         clicou_link = driver.execute_script("""
                             let els = Array.from(document.querySelectorAll('a, button, span, div'));
                             let link = els.find(x => x.innerText && x.innerText.includes('Link original'));
-                            if (link) {
-                                link.click();
-                                return true;
-                            }
+                            if (link) { link.click(); return true; }
                             return false;
                         """)
                         
                         if not clicou_link:
-                            raise Exception("Botão 'Link original' não foi encontrado na aba lateral.")
+                            raise Exception("Botão 'Link original' não localizado na gaveta do produto.")
                             
                         time.sleep(4)
                         handles_depois = driver.window_handles
@@ -279,14 +237,13 @@ else:
                             else:
                                 obs = f"Esperado: {cod_novo} | Retornado: {product_id_console}"
                         else:
-                            obs = "Nova aba da loja externa não abriu (Possível bloqueio de pop-up)."
+                            obs = "Aba externa do produto não abriu"
                     else:
-                        obs = f"Produto {cod_antigo} não retornado na tabela após aplicar filtro."
+                        obs = f"Código {cod_antigo} não encontrado no Trustvox"
 
                 except Exception as e:
-                    # Formata erros genéricos retirando o stacktrace monstruoso
                     erro_str = str(e).split("\n")[0].split("Stacktrace:")[0].strip()
-                    obs = f"Erro JS/Navegação: {erro_str}"
+                    obs = f"Falha na navegação: {erro_str}"
 
                 if status_val == "APROVADO":
                     aprovados_count += 1

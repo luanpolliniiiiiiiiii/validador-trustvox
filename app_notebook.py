@@ -155,7 +155,7 @@ else:
         options.add_argument("--disable-dev-shm-usage")
         options.add_argument("--disable-gpu")
         options.add_argument("--window-size=1920,1080")
-        options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
 
         try:
             driver = webdriver.Chrome(
@@ -165,16 +165,15 @@ else:
         except Exception:
             driver = webdriver.Chrome(options=options)
 
-        wait = WebDriverWait(driver, 12)
+        wait = WebDriverWait(driver, 15)
 
         try:
             # 1. AUTENTICAÇÃO NO TRUSTVOX
             status_box.warning("🔑 Efetuando login no Trustvox...")
             driver.get("https://app.trustvox.com.br/users/sign_in")
-            time.sleep(2)
+            time.sleep(3)
 
             try:
-                # Seletores precisos para os campos de e-mail e senha do Trustvox
                 email_field = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "input#user_email, input[name='user[email]'], input[type='email']")))
                 email_field.clear()
                 email_field.send_keys(usuario_trustvox)
@@ -184,12 +183,11 @@ else:
                 pass_field.send_keys(senha_trustvox)
 
                 submit_btn = driver.find_element(By.CSS_SELECTOR, "input[type='submit'], button[type='submit']")
-                submit_btn.click()
-                time.sleep(4)
+                driver.execute_script("arguments[0].click();", submit_btn)
+                time.sleep(5)
             except Exception as login_err:
-                status_box.error(f"Erro na tentativa de login: {str(login_err)}")
+                status_box.error(f"Erro ao preencher credenciais: {str(login_err)}")
 
-            # Confirma se o login passou
             if "sign_in" in driver.current_url:
                 status_box.error("❌ Falha na autenticação do Trustvox! Verifique o e-mail e senha informados.")
                 driver.quit()
@@ -216,81 +214,93 @@ else:
 
                 try:
                     driver.get(url_loja)
-                    time.sleep(2.5)
-
-                    # Botão 'Filtrar'
-                    btn_filtrar = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(.,'Filtrar')]")))
-                    btn_filtrar.click()
-                    time.sleep(1)
-
-                    # Opção 'Código do Produto'
-                    opcao_codigo = wait.until(EC.element_to_be_clickable((By.XPATH, "//*[contains(text(),'Código do Produto')]")))
-                    opcao_codigo.click()
-                    time.sleep(1)
-
-                    # Campo de texto do Modal do filtro
-                    input_popup = wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, "div[class*='popover'] input, div[class*='modal'] input, div[class*='filter'] input, input[type='text']")))
-                    input_popup.clear()
-                    input_popup.send_keys(cod_antigo)
-                    time.sleep(0.5)
-
-                    # Botão 'Confirmar'
-                    btn_confirmar = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(.,'Confirmar')]")))
-                    btn_confirmar.click()
                     time.sleep(3)
 
-                    # Tabela de resultados
+                    # 1. Clica no Botão 'Filtrar'
+                    try:
+                        btn_filtrar = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(.,'Filtrar')]")))
+                        driver.execute_script("arguments[0].click();", btn_filtrar)
+                        time.sleep(1.5)
+                    except Exception:
+                        raise Exception("Timeout ao localizar botão 'Filtrar'")
+
+                    # 2. Clica na Opção 'Código do Produto'
+                    try:
+                        opcao_codigo = wait.until(EC.element_to_be_clickable((By.XPATH, "//*[contains(text(),'Código do Produto')]")))
+                        driver.execute_script("arguments[0].click();", opcao_codigo)
+                        time.sleep(1.5)
+                    except Exception:
+                        raise Exception("Timeout ao selecionar opção 'Código do Produto'")
+
+                    # 3. Preenche o Input no Pop-up do Filtro
+                    try:
+                        input_popup = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "div[class*='popover'] input, div[class*='modal'] input, div[class*='filter'] input, input[type='text']")))
+                        input_popup.clear()
+                        input_popup.send_keys(cod_antigo)
+                        time.sleep(1)
+                    except Exception:
+                        raise Exception("Timeout ao localizar campo de busca no pop-up")
+
+                    # 4. Clica em 'Confirmar'
+                    try:
+                        btn_confirmar = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(.,'Confirmar')]")))
+                        driver.execute_script("arguments[0].click();", btn_confirmar)
+                        time.sleep(3.5)
+                    except Exception:
+                        raise Exception("Timeout ao clicar em 'Confirmar'")
+
+                    # 5. Busca Linha do Produto
                     linhas = driver.find_elements(By.XPATH, f"//tr[contains(.,'{cod_antigo}')]")
                     if linhas:
-                        linhas[0].click()
-                        time.sleep(2)
+                        driver.execute_script("arguments[0].click();", linhas[0])
+                        time.sleep(2.5)
 
-                        link_original = wait.until(EC.element_to_be_clickable((By.XPATH, "//*[contains(text(),'Link original')]")))
-                        
-                        handles_antes = driver.window_handles
-                        link_original.click()
-                        time.sleep(3)
-                        handles_depois = driver.window_handles
+                        try:
+                            link_original = wait.until(EC.element_to_be_clickable((By.XPATH, "//*[contains(text(),'Link original')]")))
+                            handles_antes = driver.window_handles
+                            driver.execute_script("arguments[0].click();", link_original)
+                            time.sleep(3.5)
+                            handles_depois = driver.window_handles
 
-                        if len(handles_depois) > len(handles_antes):
-                            driver.switch_to.window(handles_depois[-1])
-                            time.sleep(3)
+                            if len(handles_depois) > len(handles_antes):
+                                driver.switch_to.window(handles_depois[-1])
+                                time.sleep(3)
 
-                            product_id_console = driver.execute_script("""
-                                if (window._trustvox && Array.isArray(window._trustvox)) {
-                                    for (let item of window._trustvox) {
-                                        if (Array.isArray(item) && item[0] === '_productId') {
-                                            return String(item[1]);
+                                product_id_console = driver.execute_script("""
+                                    if (window._trustvox && Array.isArray(window._trustvox)) {
+                                        for (let item of window._trustvox) {
+                                            if (Array.isArray(item) && item[0] === '_productId') {
+                                                return String(item[1]);
+                                            }
                                         }
                                     }
-                                }
-                                if (window._trustvox && typeof window._trustvox === 'object') {
-                                    return String(window._trustvox._productId || window._trustvox.product_id || '');
-                                }
-                                return null;
-                            """)
+                                    if (window._trustvox && typeof window._trustvox === 'object') {
+                                        return String(window._trustvox._productId || window._trustvox.product_id || '');
+                                    }
+                                    return null;
+                                """)
 
-                            html_site = driver.page_source
-                            driver.close()
-                            driver.switch_to.window(handles_antes[0])
+                                html_site = driver.page_source
+                                driver.close()
+                                driver.switch_to.window(handles_antes[0])
 
-                            if product_id_console and product_id_console.strip() == cod_novo:
-                                status_val = "APROVADO"
-                                obs = f"_productId ({product_id_console}) verificado no site"
-                            elif cod_novo in html_site:
-                                status_val = "APROVADO"
-                                obs = "Código novo localizado no HTML da página"
+                                if product_id_console and product_id_console.strip() == cod_novo:
+                                    status_val = "APROVADO"
+                                    obs = f"_productId ({product_id_console}) verificado no site"
+                                elif cod_novo in html_site:
+                                    status_val = "APROVADO"
+                                    obs = "Código novo localizado no HTML da página"
+                                else:
+                                    obs = f"Esperado: {cod_novo} | Retornado: {product_id_console}"
                             else:
-                                obs = f"Esperado: {cod_novo} | Retornado: {product_id_console}"
-                        else:
-                            obs = "Não foi possível abrir a página externa do produto"
+                                obs = "Não foi possível abrir a aba externa do produto"
+                        except Exception:
+                            obs = f"Produto localizado no Trustvox, mas falhou ao clicar em 'Link original'"
                     else:
-                        obs = f"Código {cod_antigo} não encontrado na busca"
+                        obs = f"Código {cod_antigo} não encontrado na tabela pós-filtro"
 
                 except Exception as e:
-                    # Captura mensagem de erro amigável em vez da stacktrace bruta do Selenium
-                    msg_erro = str(e).split('\n')[0]
-                    obs = f"Erro na navegação: {msg_erro}"
+                    obs = str(e)
 
                 if status_val == "APROVADO":
                     aprovados_count += 1

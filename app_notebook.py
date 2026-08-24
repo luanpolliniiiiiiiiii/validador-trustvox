@@ -3,7 +3,7 @@ import time
 import pandas as pd
 import streamlit as st
 
-
+# Patch para contornar a remoção do distutils no Python 3.12+
 try:
     import setuptools._distutils as distutils
     import sys
@@ -16,7 +16,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
-
+# Configuração da página estilo NotebookLM Studio
 st.set_page_config(
     page_title="Trustvox Studio | NotebookLM Style",
     page_icon="📚",
@@ -37,7 +37,9 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-
+# ---------------------------------------------------------
+# PAINEL ESQUERDO (SIDEBAR - CREDENCIAIS & CONFIGURAÇÕES)
+# ---------------------------------------------------------
 with st.sidebar:
     st.title("🔑 Acesso ao Trustvox")
     usuario_trustvox = st.text_input("E-mail do Trustvox:", placeholder="seu-email@empresa.com")
@@ -64,7 +66,9 @@ with st.sidebar:
         index=0
     )
 
-
+# ---------------------------------------------------------
+# CORPO PRINCIPAL
+# ---------------------------------------------------------
 st.title("🛡️ Trustvox Migration Studio")
 st.caption("Validação automática de migração de produtos")
 
@@ -76,7 +80,7 @@ else:
     else:
         df_input = pd.read_excel(arquivo_enviado)
 
-    
+    # Trata colunas duplicadas na planilha
     cols_unicas = []
     counts = {}
     for col in df_input.columns:
@@ -126,6 +130,15 @@ else:
         st.markdown("### 📝 Tabela ao Vivo")
         tabela_live = st.empty()
 
+    def criar_options():
+        opts = uc.ChromeOptions()
+        opts.add_argument("--headless=new")
+        opts.add_argument("--no-sandbox")
+        opts.add_argument("--disable-dev-shm-usage")
+        opts.add_argument("--disable-gpu")
+        opts.add_argument("--window-size=1920,1080")
+        return opts
+
     def rodar_validacao():
         col_antigo_name = col_antigo
         col_novo_name = col_novo
@@ -145,17 +158,10 @@ else:
         reprovados_count = 0
         url_loja = f"https://app.trustvox.com.br/{slug_empresa}/products"
 
-        options = uc.ChromeOptions()
-        options.add_argument("--headless=new")
-        options.add_argument("--no-sandbox")
-        options.add_argument("--disable-dev-shm-usage")
-        options.add_argument("--disable-gpu")
-        options.add_argument("--window-size=1920,1080")
-
         try:
-            driver = uc.Chrome(options=options)
+            driver = uc.Chrome(options=criar_options())
         except Exception:
-            driver = uc.Chrome(version_main=122, options=options)
+            driver = uc.Chrome(version_main=122, options=criar_options())
 
         wait = WebDriverWait(driver, 20)
 
@@ -206,7 +212,7 @@ else:
                     driver.get(url_loja)
                     time.sleep(3.5)
 
-                    
+                    # Passo 1: Filtrar
                     btn_filtrar_encontrado = False
                     try:
                         btn_elem = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(.,'Filtrar') or contains(text(),'Filtrar')]")))
@@ -227,7 +233,7 @@ else:
 
                     time.sleep(1.5)
 
-                    
+                    # Passo 2: Código do Produto
                     driver.execute_script("""
                         let els = Array.from(document.querySelectorAll('div, span, li, p, a'));
                         let el = els.find(x => x.children.length === 0 && x.innerText && x.innerText.trim() === 'Código do Produto');
@@ -235,7 +241,7 @@ else:
                     """)
                     time.sleep(1.5)
 
-                   
+                    # Passo 3: Preenche o código
                     preencheu = driver.execute_script("""
                         let val = arguments[0];
                         let inputs = Array.from(document.querySelectorAll('input'));
@@ -256,7 +262,7 @@ else:
 
                     time.sleep(1)
 
-                    
+                    # Passo 4: Confirmar
                     driver.execute_script("""
                         let btns = Array.from(document.querySelectorAll('button'));
                         let b = btns.find(x => x.innerText && x.innerText.trim() === 'Confirmar');
@@ -264,7 +270,7 @@ else:
                     """)
                     time.sleep(4)
 
-                  
+                    # Passo 5: Clica no produto
                     clicou_linha = driver.execute_script("""
                         let code = arguments[0];
                         let elements = Array.from(document.querySelectorAll('tbody tr, tr, div[class*="table"] div'));
@@ -279,7 +285,7 @@ else:
                     if clicou_linha:
                         time.sleep(2.5)
 
-                        
+                        # Passo 6: Link original
                         handles_antes = driver.window_handles
                         clicou_link = driver.execute_script("""
                             let els = Array.from(document.querySelectorAll('a, button, span, div'));

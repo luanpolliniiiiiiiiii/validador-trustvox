@@ -83,7 +83,7 @@ else:
     else:
         df_input = pd.read_excel(arquivo_enviado)
 
-    # Trata colunas duplicadas
+    # Trata colunas duplicadas na planilha
     cols_unicas = []
     counts = {}
     for col in df_input.columns:
@@ -225,12 +225,6 @@ else:
 
             status_box.info(f"🚀 **Login verificado! Analisando {len(indices)} produtos...**")
 
-            # Garante que a página inicial de produtos terminou de renderizar no React
-            try:
-                wait.until(EC.presence_of_element_located((By.XPATH, "//*[contains(text(),'Produtos') or contains(text(),'Filtrar')]")))
-            except Exception:
-                pass
-
             for cont, idx in enumerate(indices, start=1):
                 val_raw = df_input.at[idx, col_antigo_name]
                 cod_antigo = str(int(val_raw)).strip() if pd.notna(val_raw) and isinstance(val_raw, (int, float)) else str(val_raw).strip() if pd.notna(val_raw) else ""
@@ -243,18 +237,54 @@ else:
                 obs = ""
 
                 try:
-                    # 1. Clica no botão "Filtrar"
-                    btn_filtrar = wait.until(EC.element_to_be_clickable((
-                        By.XPATH, "//button[contains(.,'Filtrar')] | //*[contains(text(),'Filtrar')]"
-                    )))
-                    driver.execute_script("arguments[0].click();", btn_filtrar)
+                    # Limpa qualquer filtro anterior aberto antes de aplicar novo
+                    driver.execute_script("""
+                        let cleanBtns = Array.from(document.querySelectorAll('button, a, span'));
+                        let cleanBtn = cleanBtns.find(x => x.innerText && x.innerText.trim().toLowerCase() === 'limpar');
+                        if (cleanBtn) cleanBtn.click();
+                    """)
+                    time.sleep(1)
+
+                    # 1. Aguarda ativamente o botão "Filtrar" no DOM
+                    clicou_filtrar = False
+                    for _ in range(10):  # Tenta por até 10 segundos
+                        clicou_filtrar = driver.execute_script("""
+                            let btns = Array.from(document.querySelectorAll('button, div[role="button"], a, span'));
+                            let b = btns.find(x => x.innerText && x.innerText.trim().toLowerCase() === 'filtrar');
+                            if (b) {
+                                b.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+                                return true;
+                            }
+                            return false;
+                        """)
+                        if clicou_filtrar:
+                            break
+                        time.sleep(1)
+
+                    if not clicou_filtrar:
+                        raise Exception("Botão 'Filtrar' não renderizou na tela a tempo.")
+
                     time.sleep(1.5)
 
                     # 2. Clica na opção "Código do Produto"
-                    opcao_codigo = wait.until(EC.element_to_be_clickable((
-                        By.XPATH, "//*[contains(text(),'Código do Produto')]"
-                    )))
-                    driver.execute_script("arguments[0].click();", opcao_codigo)
+                    clicou_opcao = False
+                    for _ in range(5):
+                        clicou_opcao = driver.execute_script("""
+                            let els = Array.from(document.querySelectorAll('div, span, li, p, a, button'));
+                            let el = els.find(x => x.innerText && x.innerText.trim().toLowerCase().includes('código do produto'));
+                            if (el) {
+                                el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+                                return true;
+                            }
+                            return false;
+                        """)
+                        if clicou_opcao:
+                            break
+                        time.sleep(1)
+
+                    if not clicou_opcao:
+                        raise Exception("Opção 'Código do Produto' não localizada no menu.")
+
                     time.sleep(1.5)
 
                     # 3. Preenche o código antigo no input do modal
@@ -274,18 +304,27 @@ else:
                     """, cod_antigo)
 
                     if not preencheu:
-                        raise Exception("Campo de texto para digitar o código não encontrado.")
+                        raise Exception("Campo de busca do código não localizado.")
 
                     time.sleep(1)
 
                     # 4. Clica no botão azul "Confirmar"
-                    btn_confirmar = wait.until(EC.element_to_be_clickable((
-                        By.XPATH, "//button[contains(.,'Confirmar')] | //*[contains(text(),'Confirmar')]"
-                    )))
-                    driver.execute_script("arguments[0].click();", btn_confirmar)
+                    clicou_confirmar = driver.execute_script("""
+                        let btns = Array.from(document.querySelectorAll('button, input[type="submit"], a, div'));
+                        let b = btns.find(x => x.innerText && x.innerText.trim().toLowerCase() === 'confirmar');
+                        if (b) {
+                            b.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+                            return true;
+                        }
+                        return false;
+                    """)
+
+                    if not clicou_confirmar:
+                        raise Exception("Botão 'Confirmar' não localizado no modal de filtro.")
+
                     time.sleep(3.5)
 
-                    # 5. Clica na linha da tabela correspondente ao produto filtrado
+                    # 5. Clica na linha da tabela correspondente ao produto
                     clicou_linha = driver.execute_script("""
                         let code = arguments[0];
                         let elements = Array.from(document.querySelectorAll('tbody tr, tr'));
@@ -348,24 +387,11 @@ else:
                         else:
                             obs = "Aba externa do site não abriu."
                     else:
-                        obs = f"Produto {cod_antigo} não encontrado na busca"
+                        obs = f"Produto {cod_antigo} não encontrado na tabela pós-filtro"
 
-                except TimeoutException:
-                    obs = "Timeout: Atraso na renderização dos filtros via Proxy"
                 except Exception as e:
                     erro_str = str(e).split("\n")[0].split("Stacktrace:")[0].strip()
                     obs = f"Falha na navegação: {erro_str}"
-
-                # Limpa a busca para o próximo produto sem dar F5 na página inteira
-                try:
-                    driver.execute_script("""
-                        let cleanBtns = Array.from(document.querySelectorAll('button, a, span'));
-                        let cleanBtn = cleanBtns.find(x => x.innerText && x.innerText.trim().toLowerCase() === 'limpar');
-                        if (cleanBtn) cleanBtn.click();
-                    """)
-                    time.sleep(1)
-                except Exception:
-                    pass
 
                 if status_val == "APROVADO":
                     aprovados_count += 1

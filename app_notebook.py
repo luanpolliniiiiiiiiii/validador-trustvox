@@ -179,44 +179,50 @@ else:
                 obs = ""
 
                 try:
-                    # Garante entrada limpa sem filtros acumulados anteriores
                     driver.get(url_loja)
-                    time.sleep(3.5)
+                    time.sleep(3)
 
-                    # Limpa qualquer tag/filtro antigo ativo na tela antes de buscar
-                    driver.execute_script("""
-                        let closeBtns = document.querySelectorAll('span[class*="close"], button[class*="close"], div[class*="tag"] svg, div[class*="filter"] svg');
-                        closeBtns.forEach(b => { try { b.click(); } catch(e){} });
-                    """)
-                    time.sleep(1)
+                    # Espera explícita para o botão 'Filtrar' carregar na DOM
+                    try:
+                        btn_filtrar_elem = wait.until(
+                            EC.presence_of_element_located((By.XPATH, "//button[contains(.,'Filtrar')] | //button[contains(text(),'Filtrar')]"))
+                        )
+                        driver.execute_script("arguments[0].click();", btn_filtrar_elem)
+                    except Exception:
+                        # Fallback via JS amplo
+                        clicou_f = driver.execute_script("""
+                            let btns = Array.from(document.querySelectorAll('button'));
+                            let b = btns.find(x => x.innerText && x.innerText.toLowerCase().includes('filtrar'));
+                            if (b) { b.click(); return true; }
+                            return false;
+                        """)
+                        if not clicou_f:
+                            raise Exception("Botão 'Filtrar' não foi localizado na página de produtos.")
+                    
+                    time.sleep(2)
 
-                    # Passo 1 (Vídeo 00:06): Clica no botão 'Filtrar'
-                    clicou_filtrar = driver.execute_script("""
-                        let btns = Array.from(document.querySelectorAll('button'));
-                        let b = btns.find(x => x.innerText && x.innerText.trim().includes('Filtrar'));
-                        if (b) { b.click(); return true; }
-                        return false;
-                    """)
-                    if not clicou_filtrar:
-                        raise Exception("Botão 'Filtrar' não foi localizado na página de produtos.")
-                    time.sleep(1.5)
+                    # Passo 2: Clica na opção 'Código do Produto'
+                    try:
+                        opcao_elem = wait.until(
+                            EC.presence_of_element_located((By.XPATH, "//*[contains(text(),'Código do Produto')]"))
+                        )
+                        driver.execute_script("arguments[0].click();", opcao_elem)
+                    except Exception:
+                        clicou_op = driver.execute_script("""
+                            let els = Array.from(document.querySelectorAll('div, span, li, p, a'));
+                            let el = els.find(x => x.children.length === 0 && x.innerText && x.innerText.trim() === 'Código do Produto');
+                            if (el) { el.click(); return true; }
+                            return false;
+                        """)
+                        if not clicou_op:
+                            raise Exception("Opção 'Código do Produto' não foi localizada no menu suspenso.")
+                    
+                    time.sleep(2)
 
-                    # Passo 2 (Vídeo 00:07): Clica na opção 'Código do Produto'
-                    clicou_opcao = driver.execute_script("""
-                        let els = Array.from(document.querySelectorAll('div, span, li, p, a'));
-                        let el = els.find(x => x.children.length === 0 && x.innerText && x.innerText.trim() === 'Código do Produto');
-                        if (el) { el.click(); return true; }
-                        return false;
-                    """)
-                    if not clicou_opcao:
-                        raise Exception("Opção 'Código do Produto' não foi localizada no menu suspenso.")
-                    time.sleep(1.5)
-
-                    # Passo 3 (Vídeo 00:08 - 00:13): Preenche o código do produto no popover ativo
+                    # Passo 3: Preenche o código do produto no popover
                     preencheu = driver.execute_script("""
                         let val = arguments[0];
                         let inputs = Array.from(document.querySelectorAll('input'));
-                        // Pega o input visível que não seja do header/barra superior
                         let input = inputs.find(i => !i.closest('header') && i.type !== 'hidden' && i.offsetParent !== null);
                         if (!input) input = inputs.find(i => !i.closest('header') && i.type === 'text');
                         
@@ -235,21 +241,27 @@ else:
                         raise Exception("Campo de texto do popover de filtro não foi localizado.")
                     time.sleep(1)
 
-                    # Passo 4 (Vídeo 00:13): Clica no botão 'Confirmar'
-                    clicou_confirmar = driver.execute_script("""
-                        let btns = Array.from(document.querySelectorAll('button'));
-                        let b = btns.find(x => x.innerText && x.innerText.trim() === 'Confirmar');
-                        if (b) { b.click(); return true; }
-                        return false;
-                    """)
-                    if not clicou_confirmar:
-                        raise Exception("Botão 'Confirmar' não localizado no modal de filtro.")
+                    # Passo 4: Clica no botão 'Confirmar'
+                    try:
+                        btn_conf_elem = wait.until(
+                            EC.presence_of_element_located((By.XPATH, "//button[contains(.,'Confirmar')] | //button[contains(text(),'Confirmar')]"))
+                        )
+                        driver.execute_script("arguments[0].click();", btn_conf_elem)
+                    except Exception:
+                        clicou_c = driver.execute_script("""
+                            let btns = Array.from(document.querySelectorAll('button'));
+                            let b = btns.find(x => x.innerText && x.innerText.trim() === 'Confirmar');
+                            if (b) { b.click(); return true; }
+                            return false;
+                        """)
+                        if not clicou_c:
+                            raise Exception("Botão 'Confirmar' não localizado no modal de filtro.")
+                    
                     time.sleep(4)
 
-                    # Passo 5 (Vídeo 00:16): Clica na linha do produto filtrado
+                    # Passo 5: Clica na linha do produto filtrado
                     clicou_linha = driver.execute_script("""
                         let code = arguments[0];
-                        // Busca nas células/linhas da tabela onde o código está presente
                         let elements = Array.from(document.querySelectorAll('tbody tr, tr, div[class*="table"] div'));
                         let target = elements.find(el => el.innerText && el.innerText.includes(code));
                         if (target) {
@@ -262,7 +274,7 @@ else:
                     if clicou_linha:
                         time.sleep(3)
 
-                        # Passo 6 (Vídeo 00:18 - 00:19): Clica em 'Link original' na gaveta lateral
+                        # Passo 6: Clica em 'Link original'
                         handles_antes = driver.window_handles
                         clicou_link = driver.execute_script("""
                             let els = Array.from(document.querySelectorAll('a, button, span, div'));
@@ -277,7 +289,7 @@ else:
                         time.sleep(4)
                         handles_depois = driver.window_handles
 
-                        # Passo 7 (Vídeo 00:20 - 00:33): Validação do _productId no console da aba externa
+                        # Passo 7: Validação do _productId
                         if len(handles_depois) > len(handles_antes):
                             driver.switch_to.window(handles_depois[-1])
                             time.sleep(4)

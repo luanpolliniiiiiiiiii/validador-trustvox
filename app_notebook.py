@@ -179,38 +179,51 @@ else:
                 obs = ""
 
                 try:
+                    # Garante entrada limpa sem filtros acumulados anteriores
                     driver.get(url_loja)
-                    time.sleep(3)
+                    time.sleep(3.5)
 
-                    # Passo 1: Clica no botão 'Filtrar'
+                    # Limpa qualquer tag/filtro antigo ativo na tela antes de buscar
                     driver.execute_script("""
-                        let btn = Array.from(document.querySelectorAll('button')).find(x => x.innerText && x.innerText.includes('Filtrar'));
-                        if (btn) {
-                            btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-                        }
+                        let closeBtns = document.querySelectorAll('span[class*="close"], button[class*="close"], div[class*="tag"] svg, div[class*="filter"] svg');
+                        closeBtns.forEach(b => { try { b.click(); } catch(e){} });
                     """)
-                    time.sleep(2)
+                    time.sleep(1)
 
-                    # Passo 2: Clica em 'Código do Produto'
-                    driver.execute_script("""
-                        let el = Array.from(document.querySelectorAll('*')).find(x => x.children.length === 0 && x.innerText && x.innerText.trim() === 'Código do Produto');
-                        if (el) {
-                            el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-                        }
+                    # Passo 1 (Vídeo 00:06): Clica no botão 'Filtrar'
+                    clicou_filtrar = driver.execute_script("""
+                        let btns = Array.from(document.querySelectorAll('button'));
+                        let b = btns.find(x => x.innerText && x.innerText.trim().includes('Filtrar'));
+                        if (b) { b.click(); return true; }
+                        return false;
                     """)
-                    time.sleep(2)
+                    if not clicou_filtrar:
+                        raise Exception("Botão 'Filtrar' não foi localizado na página de produtos.")
+                    time.sleep(1.5)
 
-                    # Passo 3: Preenche o código no modal do filtro
+                    # Passo 2 (Vídeo 00:07): Clica na opção 'Código do Produto'
+                    clicou_opcao = driver.execute_script("""
+                        let els = Array.from(document.querySelectorAll('div, span, li, p, a'));
+                        let el = els.find(x => x.children.length === 0 && x.innerText && x.innerText.trim() === 'Código do Produto');
+                        if (el) { el.click(); return true; }
+                        return false;
+                    """)
+                    if not clicou_opcao:
+                        raise Exception("Opção 'Código do Produto' não foi localizada no menu suspenso.")
+                    time.sleep(1.5)
+
+                    # Passo 3 (Vídeo 00:08 - 00:13): Preenche o código do produto no popover ativo
                     preencheu = driver.execute_script("""
-                        let input = document.querySelector('input[type="text"]:not(header input), div[class*="popover"] input, div[class*="modal"] input');
-                        if (!input) {
-                            let allInputs = Array.from(document.querySelectorAll('input'));
-                            input = allInputs.find(i => !i.closest('header'));
-                        }
+                        let val = arguments[0];
+                        let inputs = Array.from(document.querySelectorAll('input'));
+                        // Pega o input visível que não seja do header/barra superior
+                        let input = inputs.find(i => !i.closest('header') && i.type !== 'hidden' && i.offsetParent !== null);
+                        if (!input) input = inputs.find(i => !i.closest('header') && i.type === 'text');
+                        
                         if (input) {
                             input.focus();
-                            let nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-                            nativeSetter.call(input, arguments[0]);
+                            let setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                            setter.call(input, val);
                             input.dispatchEvent(new Event('input', { bubbles: true }));
                             input.dispatchEvent(new Event('change', { bubbles: true }));
                             return true;
@@ -219,25 +232,26 @@ else:
                     """, cod_antigo)
 
                     if not preencheu:
-                        raise Exception("Modal de busca do filtro não foi aberto na interface")
-
+                        raise Exception("Campo de texto do popover de filtro não foi localizado.")
                     time.sleep(1)
 
-                    # Passo 4: Clica em 'Confirmar'
-                    driver.execute_script("""
-                        let btn = Array.from(document.querySelectorAll('button')).find(x => x.innerText && x.innerText.trim() === 'Confirmar');
-                        if (btn) {
-                            btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-                        }
+                    # Passo 4 (Vídeo 00:13): Clica no botão 'Confirmar'
+                    clicou_confirmar = driver.execute_script("""
+                        let btns = Array.from(document.querySelectorAll('button'));
+                        let b = btns.find(x => x.innerText && x.innerText.trim() === 'Confirmar');
+                        if (b) { b.click(); return true; }
+                        return false;
                     """)
-                    time.sleep(4.5)
+                    if not clicou_confirmar:
+                        raise Exception("Botão 'Confirmar' não localizado no modal de filtro.")
+                    time.sleep(4)
 
-                    # Passo 5: Clica no produto encontrado (Injeção JS direta na tabela/linha)
-                    clicou_produto = driver.execute_script("""
+                    # Passo 5 (Vídeo 00:16): Clica na linha do produto filtrado
+                    clicou_linha = driver.execute_script("""
                         let code = arguments[0];
-                        // Procura qualquer linha de tabela ou card contendo o código exato
-                        let rows = Array.from(document.querySelectorAll('tr, tbody tr, div[class*="row"], div[class*="item"]'));
-                        let target = rows.find(r => r.innerText && r.innerText.includes(code));
+                        // Busca nas células/linhas da tabela onde o código está presente
+                        let elements = Array.from(document.querySelectorAll('tbody tr, tr, div[class*="table"] div'));
+                        let target = elements.find(el => el.innerText && el.innerText.includes(code));
                         if (target) {
                             target.click();
                             return true;
@@ -245,23 +259,25 @@ else:
                         return false;
                     """, cod_antigo)
 
-                    if clicou_produto:
+                    if clicou_linha:
                         time.sleep(3)
 
-                        # Passo 6: Clica no botão 'Link original'
+                        # Passo 6 (Vídeo 00:18 - 00:19): Clica em 'Link original' na gaveta lateral
                         handles_antes = driver.window_handles
                         clicou_link = driver.execute_script("""
-                            let link = Array.from(document.querySelectorAll('a, button, span, div')).find(x => x.innerText && x.innerText.includes('Link original'));
+                            let els = Array.from(document.querySelectorAll('a, button, span, div'));
+                            let link = els.find(x => x.innerText && x.innerText.trim().includes('Link original'));
                             if (link) { link.click(); return true; }
                             return false;
                         """)
                         
                         if not clicou_link:
-                            raise Exception("Botão 'Link original' não localizado na gaveta do produto.")
+                            raise Exception("Botão 'Link original' não encontrado na gaveta do produto.")
                             
                         time.sleep(4)
                         handles_depois = driver.window_handles
 
+                        # Passo 7 (Vídeo 00:20 - 00:33): Validação do _productId no console da aba externa
                         if len(handles_depois) > len(handles_antes):
                             driver.switch_to.window(handles_depois[-1])
                             time.sleep(4)
@@ -291,9 +307,9 @@ else:
                             else:
                                 obs = f"Esperado: {cod_novo} | Retornado: {product_id_console}"
                         else:
-                            obs = "Aba externa do produto não abriu"
+                            obs = "Aba do site original não abriu."
                     else:
-                        obs = f"Código {cod_antigo} não encontrado na tabela pós-filtro"
+                        obs = f"Produto {cod_antigo} não encontrado na tabela pós-filtro"
 
                 except Exception as e:
                     erro_str = str(e).split("\n")[0].split("Stacktrace:")[0].strip()

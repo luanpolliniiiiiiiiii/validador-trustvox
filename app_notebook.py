@@ -32,12 +32,20 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# PAINEL ESQUERDO (SIDEBAR - CREDENCIAIS & CONFIGURAÇÕES)
+# PAINEL ESQUERDO (SIDEBAR - CREDENCIAIS, PROXY & CONFIGS)
 # ---------------------------------------------------------
 with st.sidebar:
     st.title("🔑 Acesso ao Trustvox")
     usuario_trustvox = st.text_input("E-mail do Trustvox:", placeholder="seu-email@empresa.com")
     senha_trustvox = st.text_input("Senha do Trustvox:", type="password")
+
+    st.divider()
+    st.title("🌐 Configuração de Proxy Residencial")
+    proxy_server = st.text_input(
+        "Servidor Proxy (IP:Porta ou user:pass@ip:porta):",
+        placeholder="123.45.67.89:8080",
+        help="Insira o proxy residencial para evitar bloqueios de IP de nuvem no Trustvox"
+    ).strip()
 
     st.divider()
     st.title("📚 Empresa & Planilha")
@@ -64,7 +72,7 @@ with st.sidebar:
 # CORPO PRINCIPAL
 # ---------------------------------------------------------
 st.title("🛡️ Trustvox Migration Studio")
-st.caption("Validação automática de migração de produtos")
+st.caption("Validação automática de migração de produtos com rota Proxy")
 
 if arquivo_enviado is None or not slug_empresa or not usuario_trustvox or not senha_trustvox:
     st.info("👈 **Para começar:** Preencha o e-mail, a senha, o slug da empresa e suba a planilha na barra lateral.")
@@ -74,7 +82,7 @@ else:
     else:
         df_input = pd.read_excel(arquivo_enviado)
 
-    # Renomeia colunas duplicadas da planilha automaticamente no pandas
+    # Trata colunas duplicadas na planilha
     cols_unicas = []
     counts = {}
     for col in df_input.columns:
@@ -151,6 +159,10 @@ else:
         options.add_argument("--window-size=1920,1080")
         options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
 
+        # Injeta o Proxy se informado
+        if proxy_server:
+            options.add_argument(f"--proxy-server={proxy_server}")
+
         try:
             driver = webdriver.Chrome(service=Service(ChromeDriverManager(chrome_type=ChromeType.CHROMIUM).install()), options=options)
         except Exception:
@@ -159,8 +171,8 @@ else:
         wait = WebDriverWait(driver, 20)
 
         try:
-            status_box.warning("🔑 Conectando ao formulário de autenticação...")
-            driver.get("https://app.trustvox.com.br/users/sign_in")
+            status_box.warning("🔑 Conectando ao Trustvox via Proxy...")
+            driver.get("https://app.trustvox.com.br/auth/login")
             time.sleep(3)
 
             try:
@@ -172,9 +184,9 @@ else:
                 pass_elem.clear()
                 pass_elem.send_keys(senha_trustvox)
 
-                btn_submit = driver.find_element(By.CSS_SELECTOR, "input[type='submit'], button[type='submit']")
+                btn_submit = driver.find_element(By.CSS_SELECTOR, "button[type='submit'], input[type='submit']")
                 driver.execute_script("arguments[0].click();", btn_submit)
-                time.sleep(5)
+                time.sleep(6)
             except Exception as login_err:
                 log_box.warning(f"Tentativa de login: {str(login_err)}")
 
@@ -183,15 +195,14 @@ else:
 
             url_pos = driver.current_url
             if "sign_in" in url_pos or "login" in url_pos:
-                status_box.error(f"❌ Sessão negada pelo servidor na nuvem. URL retornado: {url_pos}")
-                log_box.error(f"O servidor redirecionou a conexão de nuvem para: {url_pos}")
-                
+                status_box.error(f"❌ Sessão recusada pelo servidor na nuvem. URL: {url_pos}")
+                log_box.error(f"Para acessar online via Streamlit Cloud sem bloqueio, insira um Proxy Residencial no campo da barra lateral.")
                 df_input['Status Validação'] = 'REPROVADO'
-                df_input['Observação Validação'] = f'Bloqueio de IP/Sessão na nuvem ({url_pos})'
+                df_input['Observação Validação'] = f'Bloqueio de IP na nuvem ({url_pos})'
                 driver.quit()
                 return df_input
 
-            status_box.info(f"🚀 **Login verificado! Analisando {len(indices)} produtos...**")
+            status_box.info(f"🚀 **Login verificado via Proxy! Analisando {len(indices)} produtos...**")
 
             for cont, idx in enumerate(indices, start=1):
                 val_raw = df_input.at[idx, col_antigo_name]
@@ -352,8 +363,6 @@ else:
             df_final = rodar_validacao()
             
             cols_desejadas = ['Status Validação', col_antigo, col_novo, 'Observação Validação']
-            
-            # Filtro estrito de deduplicação visual
             cols_exibicao = []
             for c in cols_desejadas:
                 if c in df_final.columns and c not in cols_exibicao:
@@ -373,7 +382,6 @@ else:
                     width="stretch"
                 )
             
-            # Garante envio de sub-dataframe sem colunas duplicadas
             df_display = df_final.loc[:, ~df_final.columns.duplicated()][cols_exibicao]
             tabela_live.dataframe(
                 df_display,

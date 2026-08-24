@@ -45,8 +45,8 @@ with st.sidebar:
     
     slug_empresa = st.text_input(
         "Slug da Empresa no Trustvox:",
-        value="alpfilm",
-        help="Exemplo: alpfilm, coty, etc."
+        value="coty",
+        help="Exemplo: coty, alpfilm, etc."
     ).strip().lower()
 
     arquivo_enviado = st.file_uploader(
@@ -168,7 +168,7 @@ else:
         wait = WebDriverWait(driver, 15)
 
         try:
-            # 1. AUTENTICAÇÃO NO TRUSTVOX
+            # 1. LOGIN AUTOMÁTICO NO TRUSTVOX
             status_box.warning("🔑 Efetuando login no Trustvox...")
             driver.get("https://app.trustvox.com.br/users/sign_in")
             time.sleep(3)
@@ -214,15 +214,21 @@ else:
 
                 try:
                     driver.get(url_loja)
-                    time.sleep(3)
+                    time.sleep(3.5)
 
-                    # 1. Clica no Botão 'Filtrar'
+                    # 1. Clica no Botão 'Filtrar' (Busca ampla por classe ou texto)
                     try:
-                        btn_filtrar = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(.,'Filtrar')]")))
+                        btn_filtrar = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[descendant-or-self::*[contains(text(),'Filtrar') or contains(@class,'filter')]]")))
                         driver.execute_script("arguments[0].click();", btn_filtrar)
                         time.sleep(1.5)
                     except Exception:
-                        raise Exception("Timeout ao localizar botão 'Filtrar'")
+                        # Fallback JS direto
+                        driver.execute_script("""
+                            let btns = Array.from(document.querySelectorAll('button'));
+                            let b = btns.find(x => x.innerText.includes('Filtrar'));
+                            if (b) b.click();
+                        """)
+                        time.sleep(1.5)
 
                     # 2. Clica na Opção 'Código do Produto'
                     try:
@@ -230,26 +236,36 @@ else:
                         driver.execute_script("arguments[0].click();", opcao_codigo)
                         time.sleep(1.5)
                     except Exception:
-                        raise Exception("Timeout ao selecionar opção 'Código do Produto'")
+                        driver.execute_script("""
+                            let els = Array.from(document.querySelectorAll('*'));
+                            let el = els.find(x => x.children.length === 0 && x.innerText && x.innerText.includes('Código do Produto'));
+                            if (el) el.click();
+                        """)
+                        time.sleep(1.5)
 
-                    # 3. Preenche o Input no Pop-up do Filtro
+                    # 3. Digita o ID no Input do Modal/Pop-up
                     try:
-                        input_popup = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "div[class*='popover'] input, div[class*='modal'] input, div[class*='filter'] input, input[type='text']")))
+                        input_popup = wait.until(EC.presence_of_element_located((By.XPATH, "//div[contains(@class,'popover') or contains(@class,'modal') or contains(@class,'filter') or contains(@class,'dropdown')]//input | //input[@type='text']")))
                         input_popup.clear()
                         input_popup.send_keys(cod_antigo)
                         time.sleep(1)
                     except Exception:
-                        raise Exception("Timeout ao localizar campo de busca no pop-up")
+                        raise Exception("Não foi possível localizar o campo de texto no pop-up do filtro")
 
-                    # 4. Clica em 'Confirmar'
+                    # 4. Clica no Botão Azul 'Confirmar'
                     try:
                         btn_confirmar = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(.,'Confirmar')]")))
                         driver.execute_script("arguments[0].click();", btn_confirmar)
-                        time.sleep(3.5)
+                        time.sleep(4)
                     except Exception:
-                        raise Exception("Timeout ao clicar em 'Confirmar'")
+                        driver.execute_script("""
+                            let btns = Array.from(document.querySelectorAll('button'));
+                            let b = btns.find(x => x.innerText.includes('Confirmar'));
+                            if (b) b.click();
+                        """)
+                        time.sleep(4)
 
-                    # 5. Busca Linha do Produto
+                    # 5. Localiza a Linha do Produto Filtrado
                     linhas = driver.find_elements(By.XPATH, f"//tr[contains(.,'{cod_antigo}')]")
                     if linhas:
                         driver.execute_script("arguments[0].click();", linhas[0])
@@ -259,7 +275,7 @@ else:
                             link_original = wait.until(EC.element_to_be_clickable((By.XPATH, "//*[contains(text(),'Link original')]")))
                             handles_antes = driver.window_handles
                             driver.execute_script("arguments[0].click();", link_original)
-                            time.sleep(3.5)
+                            time.sleep(4)
                             handles_depois = driver.window_handles
 
                             if len(handles_depois) > len(handles_antes):
@@ -293,11 +309,11 @@ else:
                                 else:
                                     obs = f"Esperado: {cod_novo} | Retornado: {product_id_console}"
                             else:
-                                obs = "Não foi possível abrir a aba externa do produto"
+                                obs = "Não foi possível abrir a aba do site oficial"
                         except Exception:
-                            obs = f"Produto localizado no Trustvox, mas falhou ao clicar em 'Link original'"
+                            obs = "Produto localizado no Trustvox, mas falhou ao abrir o Link Original"
                     else:
-                        obs = f"Código {cod_antigo} não encontrado na tabela pós-filtro"
+                        obs = f"Código {cod_antigo} não retornado na tabela após aplicar filtro"
 
                 except Exception as e:
                     obs = str(e)

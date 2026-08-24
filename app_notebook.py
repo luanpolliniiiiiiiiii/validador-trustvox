@@ -74,7 +74,7 @@ else:
     else:
         df_input = pd.read_excel(arquivo_enviado)
 
-    # Trata colunas duplicadas na planilha
+    # Renomeia colunas duplicadas da planilha de origem automaticamente (ex: Código, Código_1)
     cols_unicas = []
     counts = {}
     for col in df_input.columns:
@@ -183,7 +183,7 @@ else:
 
             url_pos = driver.current_url
             if "sign_in" in url_pos or "login" in url_pos:
-                status_box.error("❌ Falha na autenticação do Trustvox na nuvem. O IP do servidor de nuvem foi redirecionado.")
+                status_box.error("❌ Falha na autenticação do Trustvox na nuvem. O IP do servidor foi redirecionado.")
                 driver.quit()
                 return df_input
 
@@ -348,7 +348,8 @@ else:
             df_final = rodar_validacao()
             
             cols_desejadas = ['Status Validação', col_antigo, col_novo, 'Observação Validação']
-            cols_exibicao = [c for c in cols_desejadas if c in df_final.columns]
+            # Garante apenas colunas existentes e sem duplicidade de nome
+            cols_exibicao = list(dict.fromkeys([c for c in cols_desejadas if c in df_final.columns]))
 
             status_box.success("🎉 Processamento finalizado!")
 

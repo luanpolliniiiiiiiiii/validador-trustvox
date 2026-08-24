@@ -74,7 +74,7 @@ else:
     else:
         df_input = pd.read_excel(arquivo_enviado)
 
-    # Renomeia colunas duplicadas da planilha de origem automaticamente (ex: Código, Código_1)
+    # Renomeia colunas duplicadas da planilha automaticamente no pandas
     cols_unicas = []
     counts = {}
     for col in df_input.columns:
@@ -102,7 +102,7 @@ else:
             col_novo = st.selectbox("Coluna CÓDIGO NOVO:", cols_lista, index=cols_lista.index(col_novo_default))
 
         st.markdown(f"**Empresa:** `{slug_empresa}` | **Arquivo:** `{arquivo_enviado.name}`")
-        btn_iniciar = st.button("🚀 Iniciar Processamento", type="primary", use_container_width=True)
+        btn_iniciar = st.button("🚀 Iniciar Processamento", type="primary", width="stretch")
         
         status_box = st.empty()
         progress_bar = st.progress(0)
@@ -159,7 +159,7 @@ else:
         wait = WebDriverWait(driver, 20)
 
         try:
-            status_box.warning("🔑 Autenticando no Trustvox...")
+            status_box.warning("🔑 Conectando ao formulário de autenticação...")
             driver.get("https://app.trustvox.com.br/users/sign_in")
             time.sleep(3)
 
@@ -176,18 +176,22 @@ else:
                 driver.execute_script("arguments[0].click();", btn_submit)
                 time.sleep(5)
             except Exception as login_err:
-                log_box.warning(f"Aviso no login: {str(login_err)}")
+                log_box.warning(f"Tentativa de login: {str(login_err)}")
 
             driver.get(url_loja)
             time.sleep(4)
 
             url_pos = driver.current_url
             if "sign_in" in url_pos or "login" in url_pos:
-                status_box.error("❌ Falha na autenticação do Trustvox na nuvem. O IP do servidor foi redirecionado.")
+                status_box.error(f"❌ Sessão negada pelo servidor na nuvem. URL retornado: {url_pos}")
+                log_box.error(f"O servidor redirecionou a conexão de nuvem para: {url_pos}")
+                
+                df_input['Status Validação'] = 'REPROVADO'
+                df_input['Observação Validação'] = f'Bloqueio de IP/Sessão na nuvem ({url_pos})'
                 driver.quit()
                 return df_input
 
-            status_box.info(f"🚀 **Analisando {len(indices)} produtos...**")
+            status_box.info(f"🚀 **Login verificado! Analisando {len(indices)} produtos...**")
 
             for cont, idx in enumerate(indices, start=1):
                 val_raw = df_input.at[idx, col_antigo_name]
@@ -348,8 +352,12 @@ else:
             df_final = rodar_validacao()
             
             cols_desejadas = ['Status Validação', col_antigo, col_novo, 'Observação Validação']
-            # Garante apenas colunas existentes e sem duplicidade de nome
-            cols_exibicao = list(dict.fromkeys([c for c in cols_desejadas if c in df_final.columns]))
+            
+            # Filtro estrito de deduplicação visual
+            cols_exibicao = []
+            for c in cols_desejadas:
+                if c in df_final.columns and c not in cols_exibicao:
+                    cols_exibicao.append(c)
 
             status_box.success("🎉 Processamento finalizado!")
 
@@ -362,10 +370,12 @@ else:
                     data=file,
                     file_name=nome_saida,
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True
+                    width="stretch"
                 )
             
+            # Garante envio de sub-dataframe sem colunas duplicadas
+            df_display = df_final.loc[:, ~df_final.columns.duplicated()][cols_exibicao]
             tabela_live.dataframe(
-                df_final[cols_exibicao],
-                use_container_width=True
+                df_display,
+                width="stretch"
             )

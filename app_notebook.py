@@ -1,5 +1,6 @@
 import os
 import time
+import requests
 import pandas as pd
 import streamlit as st
 from selenium import webdriver
@@ -32,13 +33,25 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# PAINEL ESQUERDO (SIDEBAR - CREDENCIAIS & CONFIGURAÇÕES)
+# PAINEL ESQUERDO (SIDEBAR - AUTENTICAÇÃO E CONFIGURAÇÕES)
 # ---------------------------------------------------------
 with st.sidebar:
     st.title("🔑 Acesso ao Trustvox")
     
-    usuario_trustvox = st.text_input("E-mail do Trustvox:", placeholder="seu-email@empresa.com")
-    senha_trustvox = st.text_input("Senha do Trustvox:", type="password")
+    tipo_acesso = st.radio(
+        "Método de Autenticação:",
+        ["Credenciais Web (E-mail / Senha)", "Token de API / Cookie / Header Authorization"],
+        index=0
+    )
+
+    if "Credenciais" in tipo_acesso:
+        usuario_trustvox = st.text_input("E-mail do Trustvox:", placeholder="seu-email@empresa.com")
+        senha_trustvox = st.text_input("Senha do Trustvox:", type="password")
+        token_trustvox = ""
+    else:
+        token_trustvox = st.text_area("Token de API ou Header Cookie/Authorization:", placeholder="Cole aqui o Bearer Token ou Cookie").strip()
+        usuario_trustvox = ""
+        senha_trustvox = ""
 
     st.divider()
     st.title("📚 Empresa & Planilha")
@@ -67,8 +80,8 @@ with st.sidebar:
 st.title("🛡️ Trustvox Migration Studio")
 st.caption("Validação automática de migração de produtos")
 
-if arquivo_enviado is None or not slug_empresa or not usuario_trustvox or not senha_trustvox:
-    st.info("👈 **Para começar:** Preencha o e-mail, a senha, o slug da empresa e suba a planilha na barra lateral.")
+if arquivo_enviado is None or not slug_empresa:
+    st.info("👈 **Para começar:** Preencha as configurações na barra lateral e suba a planilha.")
 else:
     if arquivo_enviado.name.endswith('.csv'):
         df_input = pd.read_csv(arquivo_enviado)
@@ -157,48 +170,44 @@ else:
         except Exception:
             driver = webdriver.Chrome(options=options)
 
-        wait = WebDriverWait(driver, 20)
+        wait = WebDriverWait(driver, 15)
 
         try:
-            # 1. AUTENTICAÇÃO VIA FORMULÁRIO TRADICIONAL
-            status_box.warning("🔑 Efetuando login no Trustvox...")
-            driver.get("https://app.trustvox.com.br/users/sign_in")
-            time.sleep(3)
+            # TENTATIVA DE LOGIN COM TRATAMENTO DE BLOQUEIO DE NUVEM
+            if usuario_trustvox and senha_trustvox:
+                status_box.warning("🔑 Efetuando autenticação no Trustvox...")
+                driver.get("https://app.trustvox.com.br/users/sign_in")
+                time.sleep(3)
 
-            # Tenta preencher formulário padrão de login
-            try:
-                email_field = wait.until(EC.presence_of_element_located((
-                    By.CSS_SELECTOR, "input[type='email'], input#user_email, input[name='user[email]'], input[name='email']"
-                )))
-                email_field.clear()
-                email_field.send_keys(usuario_trustvox)
+                try:
+                    email_elem = driver.find_element(By.CSS_SELECTOR, "input[type='email'], input#user_email, input[name='user[email]']")
+                    pass_elem = driver.find_element(By.CSS_SELECTOR, "input[type='password'], input#user_password, input[name='user[password]']")
+                    
+                    email_elem.clear()
+                    email_elem.send_keys(usuario_trustvox)
+                    pass_elem.clear()
+                    pass_elem.send_keys(senha_trustvox)
 
-                pass_field = driver.find_element(
-                    By.CSS_SELECTOR, "input[type='password'], input#user_password, input[name='user[password]'], input[name='password']"
-                )
-                pass_field.clear()
-                pass_field.send_keys(senha_trustvox)
+                    btn_sub = driver.find_element(By.CSS_SELECTOR, "input[type='submit'], button[type='submit']")
+                    driver.execute_script("arguments[0].click();", btn_sub)
+                    time.sleep(5)
+                except Exception as e:
+                    log_box.warning(f"Tentativa de login via UI: {str(e)}")
 
-                # Submete o formulário via Selenium nativo
-                submit_btn = driver.find_element(
-                    By.CSS_SELECTOR, "input[type='submit'], button[type='submit'], button"
-                )
-                submit_btn.click()
-                time.sleep(5)
-            except Exception as login_err:
-                log_box.error(f"Aviso no preenchimento do formulário: {str(login_err)}")
+            # Injeta token de cookie caso fornecido
+            if token_trustvox:
+                driver.get("https://app.trustvox.com.br")
+                time.sleep(1)
+                try:
+                    driver.add_cookie({"name": "_trustvox_session", "value": token_trustvox, "domain": ".trustvox.com.br", "path": "/"})
+                except Exception:
+                    pass
 
-            # Confirma redirecionamento navegando para a loja
+            # Tenta acessar o painel de produtos da loja diretamente
             driver.get(url_loja)
             time.sleep(4)
 
-            url_pos_login = driver.current_url
-            if "login" in url_pos_login or "sign_in" in url_pos_login:
-                status_box.error("❌ Falha na autenticação do Trustvox! Verifique se o e-mail e a senha digitados estão corretos.")
-                driver.quit()
-                return df_input
-
-            status_box.info(f"🚀 **Login concluído com sucesso! Analisando {len(indices)} produtos...**")
+            status_box.info(f"🚀 **Iniciando validação de {len(indices)} produtos...**")
 
             for cont, idx in enumerate(indices, start=1):
                 val_raw = df_input.at[idx, col_antigo_name]
@@ -213,61 +222,48 @@ else:
 
                 try:
                     driver.get(url_loja)
-                    time.sleep(4)
+                    time.sleep(3)
 
-                    if "login" in driver.current_url or "sign_in" in driver.current_url:
-                        raise Exception(f"Sessão expirada. URL: {driver.current_url}")
+                    # Se redirecionar para a tela de login por causa de proteção na nuvem
+                    if "sign_in" in driver.current_url or "login" in driver.current_url:
+                        raise Exception("Acesso negado pelo Trustvox na nuvem (Bloqueio de IP/Sessão).")
 
                     # Passo 1: Clica no botão 'Filtrar'
                     btn_filtrar_encontrado = False
-                    for _ in range(3):
-                        try:
-                            btn_elem = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(.,'Filtrar') or contains(text(),'Filtrar')]")))
-                            driver.execute_script("arguments[0].click();", btn_elem)
-                            btn_filtrar_encontrado = True
-                            break
-                        except Exception:
-                            clicou = driver.execute_script("""
-                                let btns = Array.from(document.querySelectorAll('button'));
-                                let b = btns.find(x => x.innerText && x.innerText.toLowerCase().includes('filtrar'));
-                                if (b) { b.click(); return true; }
-                                return false;
-                            """)
-                            if clicou:
-                                btn_filtrar_encontrado = True
-                                break
-                            time.sleep(2)
-
-                    if not btn_filtrar_encontrado:
-                        raise Exception(f"Botão 'Filtrar' não localizado. URL atual: {driver.current_url}")
-                    
-                    time.sleep(2)
-
-                    # Passo 2: Clica em 'Código do Produto'
                     try:
-                        opcao_elem = wait.until(EC.element_to_be_clickable((By.XPATH, "//*[contains(text(),'Código do Produto')]")))
-                        driver.execute_script("arguments[0].click();", opcao_elem)
+                        btn_elem = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(.,'Filtrar') or contains(text(),'Filtrar')]")))
+                        driver.execute_script("arguments[0].click();", btn_elem)
+                        btn_filtrar_encontrado = True
                     except Exception:
-                        clicou_op = driver.execute_script("""
-                            let els = Array.from(document.querySelectorAll('div, span, li, p, a'));
-                            let el = els.find(x => x.children.length === 0 && x.innerText && x.innerText.trim() === 'Código do Produto');
-                            if (el) { el.click(); return true; }
+                        clicou = driver.execute_script("""
+                            let btns = Array.from(document.querySelectorAll('button'));
+                            let b = btns.find(x => x.innerText && x.innerText.toLowerCase().includes('filtrar'));
+                            if (b) { b.click(); return true; }
                             return false;
                         """)
-                        if not clicou_op:
-                            raise Exception("Opção 'Código do Produto' não foi localizada no menu suspenso.")
-                    
-                    time.sleep(2)
+                        if clicou:
+                            btn_filtrar_encontrado = True
 
-                    # Passo 3: Preenche o código no popover
+                    if not btn_filtrar_encontrado:
+                        raise Exception("Não foi possível acionar o botão 'Filtrar' no painel.")
+
+                    time.sleep(1.5)
+
+                    # Passo 2: Clica em 'Código do Produto'
+                    driver.execute_script("""
+                        let els = Array.from(document.querySelectorAll('div, span, li, p, a'));
+                        let el = els.find(x => x.children.length === 0 && x.innerText && x.innerText.trim() === 'Código do Produto');
+                        if (el) el.click();
+                    """)
+                    time.sleep(1.5)
+
+                    # Passo 3: Preenche o código
                     preencheu = driver.execute_script("""
                         let val = arguments[0];
                         let inputs = Array.from(document.querySelectorAll('input'));
                         let input = inputs.find(i => !i.closest('header') && i.type !== 'hidden' && i.offsetParent !== null);
                         if (!input) input = inputs.find(i => !i.closest('header') && i.type === 'text');
-                        
                         if (input) {
-                            input.focus();
                             let setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
                             setter.call(input, val);
                             input.dispatchEvent(new Event('input', { bubbles: true }));
@@ -278,26 +274,19 @@ else:
                     """, cod_antigo)
 
                     if not preencheu:
-                        raise Exception("Campo de texto do popover de filtro não foi localizado.")
+                        raise Exception("Modal/Popover de filtro não abriu na interface.")
+
                     time.sleep(1)
 
                     # Passo 4: Clica em 'Confirmar'
-                    try:
-                        btn_conf_elem = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(.,'Confirmar') or contains(text(),'Confirmar')]")))
-                        driver.execute_script("arguments[0].click();", btn_conf_elem)
-                    except Exception:
-                        clicou_c = driver.execute_script("""
-                            let btns = Array.from(document.querySelectorAll('button'));
-                            let b = btns.find(x => x.innerText && x.innerText.trim() === 'Confirmar');
-                            if (b) { b.click(); return true; }
-                            return false;
-                        """)
-                        if not clicou_c:
-                            raise Exception("Botão 'Confirmar' não localizado no modal de filtro.")
-                    
-                    time.sleep(4.5)
+                    driver.execute_script("""
+                        let btns = Array.from(document.querySelectorAll('button'));
+                        let b = btns.find(x => x.innerText && x.innerText.trim() === 'Confirmar');
+                        if (b) b.click();
+                    """)
+                    time.sleep(4)
 
-                    # Passo 5: Clica na linha do produto filtrado
+                    # Passo 5: Clica no produto
                     clicou_linha = driver.execute_script("""
                         let code = arguments[0];
                         let elements = Array.from(document.querySelectorAll('tbody tr, tr, div[class*="table"] div'));
@@ -310,7 +299,7 @@ else:
                     """, cod_antigo)
 
                     if clicou_linha:
-                        time.sleep(3)
+                        time.sleep(2.5)
 
                         # Passo 6: Clica em 'Link original'
                         handles_antes = driver.window_handles
@@ -320,17 +309,16 @@ else:
                             if (link) { link.click(); return true; }
                             return false;
                         """)
-                        
+
                         if not clicou_link:
-                            raise Exception("Botão 'Link original' não encontrado na gaveta do produto.")
-                            
-                        time.sleep(4)
+                            raise Exception("Botão 'Link original' não encontrado no menu do produto.")
+
+                        time.sleep(3.5)
                         handles_depois = driver.window_handles
 
-                        # Passo 7: Validação do _productId
                         if len(handles_depois) > len(handles_antes):
                             driver.switch_to.window(handles_depois[-1])
-                            time.sleep(4)
+                            time.sleep(3.5)
 
                             product_id_console = driver.execute_script("""
                                 if (window._trustvox && Array.isArray(window._trustvox)) {
@@ -359,7 +347,7 @@ else:
                         else:
                             obs = "Aba do site original não abriu."
                     else:
-                        obs = f"Produto {cod_antigo} não encontrado na tabela pós-filtro"
+                        obs = f"Produto {cod_antigo} não retornado na tabela após aplicar filtro."
 
                 except Exception as e:
                     erro_str = str(e).split("\n")[0].split("Stacktrace:")[0].strip()

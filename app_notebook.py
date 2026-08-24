@@ -1,0 +1,296 @@
+import asyncio
+import os
+import pandas as pd
+import streamlit as st
+from playwright.async_api import async_playwright
+
+# Configuração da página estilo NotebookLM Studio
+st.set_page_config(
+    page_title="Trustvox Studio | NotebookLM Style",
+    page_icon="📚",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+st.markdown("""
+<style>
+    .stApp { background-color: #0f1117; color: #e6e6e6; }
+    .metric-card {
+        background-color: #1a1d24;
+        padding: 16px;
+        border-radius: 12px;
+        border: 1px solid #2d313e;
+        text-align: center;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# ---------------------------------------------------------
+# PAINEL ESQUERDO (SIDEBAR - FONTES DE DADOS & CONFIGURAÇÕES)
+# ---------------------------------------------------------
+with st.sidebar:
+    st.title("📚 Fontes & Empresa")
+    st.caption("Configurações da validação")
+    
+    slug_empresa = st.text_input(
+        "Slug da Empresa no Trustvox:",
+        value="alpfilm",
+        help="Exemplo: alpfilm, coty, etc. Montará https://app.trustvox.com.br/SUA_EMPRESA/products"
+    ).strip().lower()
+
+    arquivo_enviado = st.file_uploader(
+        "Carregar Planilha De/Para",
+        type=["xlsx", "csv"],
+        help="Suba a planilha com os códigos antigos e novos"
+    )
+    
+    st.divider()
+    st.subheader("⚙️ Parâmetros do Studio")
+    
+    modo_validacao = st.radio(
+        "Escopo de Validação",
+        ["Amostragem em Blocos (~40%)", "Validar 100% dos Produtos"],
+        index=0
+    )
+    
+    tempo_preparacao = st.slider(
+        "Tempo para Login/Sessão (s)",
+        min_value=10, max_value=60, value=20, step=5
+    )
+
+# ---------------------------------------------------------
+# CORPO PRINCIPAL
+# ---------------------------------------------------------
+st.title("🛡️ Trustvox Migration Studio")
+st.caption("Validação inteligente de códigos migrados entre Trustvox e E-commerce")
+
+if arquivo_enviado is None or not slug_empresa:
+    st.info("👈 **Para começar:** Informe o slug da empresa e suba uma planilha de migração na barra lateral.")
+else:
+    if arquivo_enviado.name.endswith('.csv'):
+        df_input = pd.read_csv(arquivo_enviado)
+    else:
+        df_input = pd.read_excel(arquivo_enviado)
+
+    # Identificação inteligente com prioridade para CÓDIGO / ID
+    cols_lista = list(df_input.columns)
+    
+    col_antigo_default = next(
+        (c for c in cols_lista if any(k in str(c).lower() for k in ['cod_antigo', 'código antigo', 'codigo antigo', 'id antigo', 'id_antigo'])),
+        next((c for c in cols_lista if any(k in str(c).lower() for k in ['antigo', 'de', 'old'])), cols_lista[0])
+    )
+    
+    col_novo_default = next(
+        (c for c in cols_lista if any(k in str(c).lower() for k in ['cod_novo', 'código novo', 'codigo novo', 'id novo', 'id_novo'])),
+        next((c for c in cols_lista if any(k in str(c).lower() for k in ['novo', 'para', 'new'])), cols_lista[1] if len(cols_lista) > 1 else cols_lista[0])
+    )
+
+    col_execucao, col_analytics = st.columns([1.1, 0.9], gap="large")
+
+    with col_execucao:
+        st.markdown("### 🎯 Central de Execução")
+        
+        # Mapeamento manual das colunas para garantia de acerto
+        col1_sel, col2_sel = st.columns(2)
+        with col1_sel:
+            col_antigo = st.selectbox("Coluna de CÓDIGO ANTIGO (Trustvox):", cols_lista, index=cols_lista.index(col_antigo_default))
+        with col2_sel:
+            col_novo = st.selectbox("Coluna de CÓDIGO NOVO (Site):", cols_lista, index=cols_lista.index(col_novo_default))
+
+        st.markdown(f"**Empresa:** `{slug_empresa}`")
+        st.markdown(f"**URL Alvo:** `https://app.trustvox.com.br/{slug_empresa}/products`")
+        st.markdown(f"**Arquivo:** `{arquivo_enviado.name}` ({len(df_input)} registros)")
+
+        btn_iniciar = st.button("🚀 Iniciar Processamento", type="primary", use_container_width=True)
+        
+        status_box = st.empty()
+        progress_bar = st.progress(0)
+        log_box = st.container(height=350)
+
+    with col_analytics:
+        st.markdown("### 📊 Painel de Insights")
+        
+        m1, m2, m3 = st.columns(3)
+        with m1:
+            kpi_total = st.empty()
+            kpi_total.metric("Analisados", "0")
+        with m2:
+            kpi_ok = st.empty()
+            kpi_ok.metric("Aprovados", "0")
+        with m3:
+            kpi_err = st.empty()
+            kpi_err.metric("Reprovados", "0")
+
+        st.divider()
+        st.markdown("### 📝 Tabela ao Vivo")
+        tabela_live = st.empty()
+
+    # --- LÓGICA ASSÍNCRONA DE AUTOMAÇÃO ---
+    async def rodar_validacao():
+        col_antigo_name = col_antigo
+        col_novo_name = col_novo
+
+        df_input['Status Validação'] = 'Não Testado'
+        df_input['Observação Validação'] = '-'
+
+        total_rows = len(df_input)
+
+        if "100%" in modo_validacao:
+            indices = list(range(total_rows))
+        else:
+            indices = []
+            for inicio in range(0, total_rows, 25):
+                indices.extend(range(inicio, min(inicio + 10, total_rows)))
+
+        aprovados_count = 0
+        reprovados_count = 0
+
+        url_loja = f"https://app.trustvox.com.br/{slug_empresa}/products"
+
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(channel="chrome", headless=False)
+            context = await browser.new_context()
+            page = await context.new_page()
+
+            await page.goto("https://app.trustvox.com.br/")
+
+            for s in range(tempo_preparacao, 0, -1):
+                status_box.warning(f"⏳ **Faça login no Trustvox se necessário...** ({s}s restantes)")
+                await asyncio.sleep(1)
+
+            status_box.info(f"🚀 **Iniciando validação na loja {slug_empresa}...**")
+
+            for cont, idx in enumerate(indices, start=1):
+                # Garante que o valor extraído é tratado estritamente como CÓDIGO (limpo de casas decimais do pandas caso seja número)
+                val_raw = df_input.at[idx, col_antigo_name]
+                if pd.notna(val_raw):
+                    cod_antigo = str(int(val_raw)).strip() if isinstance(val_raw, (int, float)) and val_raw == val_raw else str(val_raw).strip()
+                else:
+                    cod_antigo = ""
+
+                val_novo_raw = df_input.at[idx, col_novo_name]
+                if pd.notna(val_novo_raw):
+                    cod_novo = str(int(val_novo_raw)).strip() if isinstance(val_novo_raw, (int, float)) and val_novo_raw == val_novo_raw else str(val_novo_raw).strip()
+                else:
+                    cod_novo = ""
+
+                linha_excel = idx + 2
+
+                status_val = "REPROVADO"
+                obs = ""
+
+                try:
+                    await page.goto(url_loja, wait_until="domcontentloaded")
+                    await page.wait_for_timeout(1000)
+
+                    # 1. Clica em 'Filtrar'
+                    btn_filtrar = page.locator("button:has-text('Filtrar')").first
+                    await btn_filtrar.click(timeout=8000)
+                    await page.wait_for_timeout(500)
+
+                    # 2. Clica na opção 'Código do Produto'
+                    opcao_codigo = page.locator("text=Código do Produto").first
+                    await opcao_codigo.click(timeout=8000)
+                    await page.wait_for_timeout(500)
+
+                    # 3. Digita EXCLUSIVAMENTE o código do produto na caixa flutuante do filtro
+                    input_popup = page.locator("div[class*='popover'] input, div[class*='modal'] input, div[class*='filter'] input").first
+                    if not await input_popup.is_visible():
+                        input_popup = page.locator("input").filter(has_not=page.locator("header input")).last
+
+                    await input_popup.click(timeout=5000)
+                    await input_popup.fill(cod_antigo)
+                    await page.wait_for_timeout(400)
+
+                    # 4. Clica em 'Confirmar'
+                    btn_confirmar = page.locator("button:has-text('Confirmar')").first
+                    await btn_confirmar.click(timeout=5000)
+                    await page.wait_for_timeout(2500)
+
+                    # 5. Clica no produto filtrado na tabela
+                    linha_produto = page.locator(f"tr:has-text('{cod_antigo}'), tbody tr").first
+                    
+                    if await linha_produto.is_visible():
+                        await linha_produto.click(timeout=8000)
+                        await page.wait_for_timeout(2000)
+
+                        async with context.expect_page(timeout=12000) as new_page_info:
+                            await page.click("text=Link original", timeout=8000)
+                        
+                        page_site = await new_page_info.value
+                        await page_site.wait_for_load_state("domcontentloaded")
+                        await page_site.wait_for_timeout(2500)
+
+                        product_id_console = await page_site.evaluate("""
+                            () => {
+                                if (window._trustvox && Array.isArray(window._trustvox)) {
+                                    for (let item of window._trustvox) {
+                                        if (Array.isArray(item) && item[0] === '_productId') {
+                                            return String(item[1]);
+                                        }
+                                    }
+                                }
+                                if (window._trustvox && typeof window._trustvox === 'object') {
+                                    return String(window._trustvox._productId || window._trustvox.product_id || '');
+                                }
+                                return null;
+                            }
+                        """)
+
+                        html_site = await page_site.content()
+                        await page_site.close()
+
+                        if product_id_console and product_id_console.strip() == cod_novo:
+                            status_val = "APROVADO"
+                            obs = f"_productId ({product_id_console}) verificado no site"
+                        elif cod_novo in html_site:
+                            status_val = "APROVADO"
+                            obs = "Código novo localizado no HTML da página"
+                        else:
+                            obs = f"Esperado: {cod_novo} | Retornado: {product_id_console}"
+                    else:
+                        obs = f"Código {cod_antigo} não encontrado na busca"
+
+                except Exception as e:
+                    obs = f"Falha na navegação: {str(e)}"
+
+                if status_val == "APROVADO":
+                    aprovados_count += 1
+                    log_box.success(f"Linha {linha_excel} | ID {cod_antigo} ➔ {cod_novo} | ✅ APROVADO")
+                else:
+                    reprovados_count += 1
+                    log_box.error(f"Linha {linha_excel} | ID {cod_antigo} ➔ {cod_novo} | ❌ REPROVADO ({obs})")
+
+                df_input.at[idx, 'Status Validação'] = status_val
+                df_input.at[idx, 'Observação Validação'] = obs
+
+                kpi_total.metric("Analisados", f"{cont}/{len(indices)}")
+                kpi_ok.metric("Aprovados", f"{aprovados_count}")
+                kpi_err.metric("Reprovados", f"{reprovados_count}")
+
+                progress_bar.progress(cont / len(indices))
+
+            await browser.close()
+            return df_input
+
+    if btn_iniciar:
+        with st.spinner("Iniciando processamento no navegador..."):
+            df_final = asyncio.run(rodar_validacao())
+            status_box.success("🎉 Validação concluída com sucesso!")
+
+            nome_saida = f"relatorio_{slug_empresa}_validado.xlsx"
+            df_final.to_excel(nome_saida, index=False)
+
+            with open(nome_saida, "rb") as file:
+                st.download_button(
+                    label="📥 Baixar Relatório Consolidado (Excel)",
+                    data=file,
+                    file_name=nome_saida,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+            
+            tabela_live.dataframe(
+                df_final[['Status Validação', col_antigo, col_novo, 'Observação Validação']],
+                use_container_width=True
+            )

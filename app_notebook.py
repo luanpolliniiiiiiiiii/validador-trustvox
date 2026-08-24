@@ -2,19 +2,13 @@ import os
 import time
 import pandas as pd
 import streamlit as st
-
-# Patch para contornar a remoção do distutils no Python 3.12+
-try:
-    import setuptools._distutils as distutils
-    import sys
-    sys.modules['distutils'] = distutils
-except Exception:
-    pass
-
-import undetected_chromedriver as uc
+from selenium import webdriver
 from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from webdriver_manager.chrome import ChromeDriverManager
+from webdriver_manager.core.os_manager import ChromeType
 
 # Configuração da página estilo NotebookLM Studio
 st.set_page_config(
@@ -130,15 +124,6 @@ else:
         st.markdown("### 📝 Tabela ao Vivo")
         tabela_live = st.empty()
 
-    def criar_options():
-        opts = uc.ChromeOptions()
-        opts.add_argument("--headless=new")
-        opts.add_argument("--no-sandbox")
-        opts.add_argument("--disable-dev-shm-usage")
-        opts.add_argument("--disable-gpu")
-        opts.add_argument("--window-size=1920,1080")
-        return opts
-
     def rodar_validacao():
         col_antigo_name = col_antigo
         col_novo_name = col_novo
@@ -158,16 +143,23 @@ else:
         reprovados_count = 0
         url_loja = f"https://app.trustvox.com.br/{slug_empresa}/products"
 
+        options = webdriver.ChromeOptions()
+        options.add_argument("--headless=new")
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--disable-gpu")
+        options.add_argument("--window-size=1920,1080")
+        options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
+
         try:
-            driver = uc.Chrome(options=criar_options())
+            driver = webdriver.Chrome(service=Service(ChromeDriverManager(chrome_type=ChromeType.CHROMIUM).install()), options=options)
         except Exception:
-            driver = uc.Chrome(version_main=122, options=criar_options())
+            driver = webdriver.Chrome(options=options)
 
         wait = WebDriverWait(driver, 20)
 
         try:
-            # 1. LOGIN INDETECTÁVEL
-            status_box.warning("🔑 Conectando ao Trustvox via Undetected Chrome...")
+            status_box.warning("🔑 Autenticando no Trustvox...")
             driver.get("https://app.trustvox.com.br/users/sign_in")
             time.sleep(3)
 
@@ -182,20 +174,20 @@ else:
 
                 btn_submit = driver.find_element(By.CSS_SELECTOR, "input[type='submit'], button[type='submit']")
                 driver.execute_script("arguments[0].click();", btn_submit)
-                time.sleep(6)
+                time.sleep(5)
             except Exception as login_err:
-                log_box.warning(f"Aviso no envio de credenciais: {str(login_err)}")
+                log_box.warning(f"Aviso no login: {str(login_err)}")
 
             driver.get(url_loja)
             time.sleep(4)
 
             url_pos = driver.current_url
             if "sign_in" in url_pos or "login" in url_pos:
-                status_box.error("❌ Falha na autenticação do Trustvox. Verifique se o e-mail e a senha estão corretos.")
+                status_box.error("❌ Falha na autenticação do Trustvox na nuvem. O IP do servidor de nuvem foi redirecionado.")
                 driver.quit()
                 return df_input
 
-            status_box.info(f"🚀 **Login bem-sucedido! Analisando {len(indices)} produtos...**")
+            status_box.info(f"🚀 **Analisando {len(indices)} produtos...**")
 
             for cont, idx in enumerate(indices, start=1):
                 val_raw = df_input.at[idx, col_antigo_name]
@@ -212,7 +204,6 @@ else:
                     driver.get(url_loja)
                     time.sleep(3.5)
 
-                    # Passo 1: Filtrar
                     btn_filtrar_encontrado = False
                     try:
                         btn_elem = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(.,'Filtrar') or contains(text(),'Filtrar')]")))
@@ -233,7 +224,6 @@ else:
 
                     time.sleep(1.5)
 
-                    # Passo 2: Código do Produto
                     driver.execute_script("""
                         let els = Array.from(document.querySelectorAll('div, span, li, p, a'));
                         let el = els.find(x => x.children.length === 0 && x.innerText && x.innerText.trim() === 'Código do Produto');
@@ -241,7 +231,6 @@ else:
                     """)
                     time.sleep(1.5)
 
-                    # Passo 3: Preenche o código
                     preencheu = driver.execute_script("""
                         let val = arguments[0];
                         let inputs = Array.from(document.querySelectorAll('input'));
@@ -258,11 +247,10 @@ else:
                     """, cod_antigo)
 
                     if not preencheu:
-                        raise Exception("Modal de filtro não foi aberto na interface.")
+                        raise Exception("Modal de filtro não abriu na interface.")
 
                     time.sleep(1)
 
-                    # Passo 4: Confirmar
                     driver.execute_script("""
                         let btns = Array.from(document.querySelectorAll('button'));
                         let b = btns.find(x => x.innerText && x.innerText.trim() === 'Confirmar');
@@ -270,7 +258,6 @@ else:
                     """)
                     time.sleep(4)
 
-                    # Passo 5: Clica no produto
                     clicou_linha = driver.execute_script("""
                         let code = arguments[0];
                         let elements = Array.from(document.querySelectorAll('tbody tr, tr, div[class*="table"] div'));
@@ -285,7 +272,6 @@ else:
                     if clicou_linha:
                         time.sleep(2.5)
 
-                        # Passo 6: Link original
                         handles_antes = driver.window_handles
                         clicou_link = driver.execute_script("""
                             let els = Array.from(document.querySelectorAll('a, button, span, div'));
@@ -362,10 +348,7 @@ else:
             df_final = rodar_validacao()
             
             cols_desejadas = ['Status Validação', col_antigo, col_novo, 'Observação Validação']
-            cols_exibicao = []
-            for c in cols_desejadas:
-                if c in df_final.columns and c not in cols_exibicao:
-                    cols_exibicao.append(c)
+            cols_exibicao = [c for c in cols_desejadas if c in df_final.columns]
 
             status_box.success("🎉 Processamento finalizado!")
 

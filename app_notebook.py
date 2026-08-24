@@ -137,7 +137,7 @@ else:
         except Exception:
             driver = webdriver.Chrome(options=options)
 
-        wait = WebDriverWait(driver, 15)
+        wait = WebDriverWait(driver, 20)
 
         try:
             # 1. LOGIN AUTOMÁTICO NO TRUSTVOX
@@ -179,33 +179,41 @@ else:
                 obs = ""
 
                 try:
+                    # Carrega a página da loja e aguarda estabilização
                     driver.get(url_loja)
-                    time.sleep(3)
+                    time.sleep(4)
 
-                    # Espera explícita para o botão 'Filtrar' carregar na DOM
-                    try:
-                        btn_filtrar_elem = wait.until(
-                            EC.presence_of_element_located((By.XPATH, "//button[contains(.,'Filtrar')] | //button[contains(text(),'Filtrar')]"))
-                        )
-                        driver.execute_script("arguments[0].click();", btn_filtrar_elem)
-                    except Exception:
-                        # Fallback via JS amplo
-                        clicou_f = driver.execute_script("""
-                            let btns = Array.from(document.querySelectorAll('button'));
-                            let b = btns.find(x => x.innerText && x.innerText.toLowerCase().includes('filtrar'));
-                            if (b) { b.click(); return true; }
-                            return false;
-                        """)
-                        if not clicou_f:
-                            raise Exception("Botão 'Filtrar' não foi localizado na página de produtos.")
+                    # Tenta clicar no botão 'Filtrar' com múltiplas tentativas e esperas
+                    btn_filtrar_encontrado = False
+                    for tentativa in range(3):
+                        try:
+                            # Tenta via XPath nativo
+                            btn_elem = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(.,'Filtrar') or contains(text(),'Filtrar')]")))
+                            driver.execute_script("arguments[0].click();", btn_elem)
+                            btn_filtrar_encontrado = True
+                            break
+                        except Exception:
+                            # Tenta via JS procurando qualquer botão da página
+                            clicou = driver.execute_script("""
+                                let btns = Array.from(document.querySelectorAll('button'));
+                                let b = btns.find(x => x.innerText && x.innerText.toLowerCase().includes('filtrar'));
+                                if (b) { b.click(); return true; }
+                                return false;
+                            """)
+                            if clicou:
+                                btn_filtrar_encontrado = True
+                                break
+                            time.sleep(2)
+
+                    if not btn_filtrar_encontrado:
+                        url_atual = driver.current_url
+                        raise Exception(f"Botão 'Filtrar' não localizado. URL atual: {url_atual}")
                     
                     time.sleep(2)
 
-                    # Passo 2: Clica na opção 'Código do Produto'
+                    # Passo 2: Clica em 'Código do Produto'
                     try:
-                        opcao_elem = wait.until(
-                            EC.presence_of_element_located((By.XPATH, "//*[contains(text(),'Código do Produto')]"))
-                        )
+                        opcao_elem = wait.until(EC.element_to_be_clickable((By.XPATH, "//*[contains(text(),'Código do Produto')]")))
                         driver.execute_script("arguments[0].click();", opcao_elem)
                     except Exception:
                         clicou_op = driver.execute_script("""
@@ -241,11 +249,9 @@ else:
                         raise Exception("Campo de texto do popover de filtro não foi localizado.")
                     time.sleep(1)
 
-                    # Passo 4: Clica no botão 'Confirmar'
+                    # Passo 4: Clica em 'Confirmar'
                     try:
-                        btn_conf_elem = wait.until(
-                            EC.presence_of_element_located((By.XPATH, "//button[contains(.,'Confirmar')] | //button[contains(text(),'Confirmar')]"))
-                        )
+                        btn_conf_elem = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(.,'Confirmar') or contains(text(),'Confirmar')]")))
                         driver.execute_script("arguments[0].click();", btn_conf_elem)
                     except Exception:
                         clicou_c = driver.execute_script("""
@@ -257,7 +263,7 @@ else:
                         if not clicou_c:
                             raise Exception("Botão 'Confirmar' não localizado no modal de filtro.")
                     
-                    time.sleep(4)
+                    time.sleep(4.5)
 
                     # Passo 5: Clica na linha do produto filtrado
                     clicou_linha = driver.execute_script("""
@@ -289,7 +295,7 @@ else:
                         time.sleep(4)
                         handles_depois = driver.window_handles
 
-                        # Passo 7: Validação do _productId
+                        # Passo 7: Validação do _productId na aba externa
                         if len(handles_depois) > len(handles_antes):
                             driver.switch_to.window(handles_depois[-1])
                             time.sleep(4)

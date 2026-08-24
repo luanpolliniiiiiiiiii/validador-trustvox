@@ -178,11 +178,11 @@ else:
         except Exception:
             driver = webdriver.Chrome(options=options)
 
-        driver.set_page_load_timeout(45)
-        wait = WebDriverWait(driver, 30)
+        driver.set_page_load_timeout(60)
+        wait = WebDriverWait(driver, 35)
 
         try:
-            status_box.warning("🔑 Autenticando no Trustvox...")
+            status_box.warning("🔑 Autenticando no Trustvox via Proxy...")
             try:
                 driver.get("https://app.trustvox.com.br/auth/login")
             except Exception as nav_err:
@@ -208,8 +208,9 @@ else:
                 driver.execute_script("arguments[0].click();", btn_submit)
                 time.sleep(5)
             except Exception as login_err:
-                log_box.warning(f"Tentativa de envio de formulário: {str(login_err)}")
+                log_box.warning(f"Envio do formulário de login: {str(login_err)}")
 
+            # Navega até o painel de produtos da loja
             driver.get(url_loja)
             time.sleep(6)
 
@@ -224,6 +225,12 @@ else:
 
             status_box.info(f"🚀 **Login verificado! Analisando {len(indices)} produtos...**")
 
+            # Garante que a página inicial de produtos terminou de renderizar no React
+            try:
+                wait.until(EC.presence_of_element_located((By.XPATH, "//*[contains(text(),'Produtos') or contains(text(),'Filtrar')]")))
+            except Exception:
+                pass
+
             for cont, idx in enumerate(indices, start=1):
                 val_raw = df_input.at[idx, col_antigo_name]
                 cod_antigo = str(int(val_raw)).strip() if pd.notna(val_raw) and isinstance(val_raw, (int, float)) else str(val_raw).strip() if pd.notna(val_raw) else ""
@@ -236,34 +243,21 @@ else:
                 obs = ""
 
                 try:
-                    # Se não estiver na página de produtos, navega uma única vez
-                    if f"/{slug_empresa}/products" not in driver.current_url:
-                        driver.get(url_loja)
-                        time.sleep(4)
-
-                    # Limpa filtros anteriores existentes antes de aplicar novo filtro
-                    driver.execute_script("""
-                        let cleanBtns = Array.from(document.querySelectorAll('button, a, span'));
-                        let cleanBtn = cleanBtns.find(x => x.innerText && x.innerText.trim().toLowerCase() === 'limpar');
-                        if (cleanBtn) cleanBtn.click();
-                    """)
-                    time.sleep(1)
-
-                    # 1. Aguarda dinamicamente o botão "Filtrar"
+                    # 1. Clica no botão "Filtrar"
                     btn_filtrar = wait.until(EC.element_to_be_clickable((
-                        By.XPATH, "//button[contains(normalize-space(),'Filtrar')] | //*[contains(text(),'Filtrar')]"
+                        By.XPATH, "//button[contains(.,'Filtrar')] | //*[contains(text(),'Filtrar')]"
                     )))
                     driver.execute_script("arguments[0].click();", btn_filtrar)
                     time.sleep(1.5)
 
-                    # 2. Aguarda dinamicamente a opção "Código do Produto"
+                    # 2. Clica na opção "Código do Produto"
                     opcao_codigo = wait.until(EC.element_to_be_clickable((
-                        By.XPATH, "//*[contains(normalize-space(),'Código do Produto') or contains(text(),'Código do Produto')]"
+                        By.XPATH, "//*[contains(text(),'Código do Produto')]"
                     )))
                     driver.execute_script("arguments[0].click();", opcao_codigo)
                     time.sleep(1.5)
 
-                    # 3. Preenche o código no campo de input do popover
+                    # 3. Preenche o código antigo no input do modal
                     preencheu = driver.execute_script("""
                         let val = arguments[0];
                         let inputs = Array.from(document.querySelectorAll('input'));
@@ -280,18 +274,18 @@ else:
                     """, cod_antigo)
 
                     if not preencheu:
-                        raise Exception("Campo de busca do código não localizado no popover.")
+                        raise Exception("Campo de texto para digitar o código não encontrado.")
 
                     time.sleep(1)
 
-                    # 4. Aguarda e clica no botão azul "Confirmar"
+                    # 4. Clica no botão azul "Confirmar"
                     btn_confirmar = wait.until(EC.element_to_be_clickable((
-                        By.XPATH, "//button[contains(normalize-space(),'Confirmar')] | //*[contains(text(),'Confirmar')]"
+                        By.XPATH, "//button[contains(.,'Confirmar')] | //*[contains(text(),'Confirmar')]"
                     )))
                     driver.execute_script("arguments[0].click();", btn_confirmar)
-                    time.sleep(4)
+                    time.sleep(3.5)
 
-                    # 5. Clica na linha da tabela correspondente ao produto
+                    # 5. Clica na linha da tabela correspondente ao produto filtrado
                     clicou_linha = driver.execute_script("""
                         let code = arguments[0];
                         let elements = Array.from(document.querySelectorAll('tbody tr, tr'));
@@ -354,13 +348,24 @@ else:
                         else:
                             obs = "Aba externa do site não abriu."
                     else:
-                        obs = f"Produto {cod_antigo} não encontrado na tabela pós-filtro"
+                        obs = f"Produto {cod_antigo} não encontrado na busca"
 
                 except TimeoutException:
-                    obs = "Tempo limite excedido (Timeout) ao aguardar renderização da página via Proxy"
+                    obs = "Timeout: Atraso na renderização dos filtros via Proxy"
                 except Exception as e:
                     erro_str = str(e).split("\n")[0].split("Stacktrace:")[0].strip()
                     obs = f"Falha na navegação: {erro_str}"
+
+                # Limpa a busca para o próximo produto sem dar F5 na página inteira
+                try:
+                    driver.execute_script("""
+                        let cleanBtns = Array.from(document.querySelectorAll('button, a, span'));
+                        let cleanBtn = cleanBtns.find(x => x.innerText && x.innerText.trim().toLowerCase() === 'limpar');
+                        if (cleanBtn) cleanBtn.click();
+                    """)
+                    time.sleep(1)
+                except Exception:
+                    pass
 
                 if status_val == "APROVADO":
                     aprovados_count += 1

@@ -42,9 +42,9 @@ with st.sidebar:
     st.divider()
     st.title("🌐 Configuração de Proxy")
     proxy_server = st.text_input(
-        "Servidor Proxy (IP:Porta):",
-        placeholder="ex: 185.199.229.156:7492",
-        help="Deixe em branco se não estiver usando proxy"
+        "Servidor Proxy (IP:Porta ou user:pass@IP:Porta):",
+        placeholder="ex: mxjcpfer:f080q5vj4ys9@198.23.243.226:6361",
+        help="Insira no formato usuario:senha@IP:Porta ou altere no Webshare para IP Authorization e use apenas IP:Porta"
     ).strip()
 
     st.divider()
@@ -160,8 +160,18 @@ else:
         options.add_argument("--window-size=1920,1080")
         options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
 
+        # Trata a entrada do Proxy (com ou sem usuario:senha)
         if proxy_server:
-            options.add_argument(f"--proxy-server={proxy_server}")
+            if "@" in proxy_server:
+                try:
+                    user_pass, ip_port = proxy_server.split("@")
+                    options.add_argument(f"--proxy-server=http://{ip_port}")
+                    user, password = user_pass.split(":")
+                    options.add_argument(f"--proxy-auth={user}:{password}")
+                except Exception:
+                    options.add_argument(f"--proxy-server=http://{proxy_server}")
+            else:
+                options.add_argument(f"--proxy-server=http://{proxy_server}")
 
         try:
             driver = webdriver.Chrome(service=Service(ChromeDriverManager(chrome_type=ChromeType.CHROMIUM).install()), options=options)
@@ -176,7 +186,7 @@ else:
             try:
                 driver.get("https://app.trustvox.com.br/auth/login")
             except Exception as nav_err:
-                status_box.error(f"❌ Falha de conexão na navegação. Verifique o servidor de Proxy informado.")
+                status_box.error("❌ Falha de conexão na navegação. Verifique o servidor de Proxy informado.")
                 log_box.error(f"Erro de rede/proxy: {str(nav_err).split('\n')[0]}")
                 df_input['Status Validação'] = 'REPROVADO'
                 df_input['Observação Validação'] = 'Falha de conexão com a URL (Proxy inativo ou bloqueado)'

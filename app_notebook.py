@@ -29,16 +29,21 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# PAINEL ESQUERDO (SIDEBAR - FONTES DE DADOS & CONFIGURAÇÕES)
+# PAINEL ESQUERDO (SIDEBAR - CREDENCIAIS & CONFIGURAÇÕES)
 # ---------------------------------------------------------
 with st.sidebar:
-    st.title("📚 Fontes & Empresa")
-    st.caption("Configurações da validação")
+    st.title("🔑 Acesso ao Trustvox")
+    
+    usuario_trustvox = st.text_input("E-mail do Trustvox:", placeholder="seu-email@empresa.com")
+    senha_trustvox = st.text_input("Senha do Trustvox:", type="password")
+
+    st.divider()
+    st.title("📚 Empresa & Planilha")
     
     slug_empresa = st.text_input(
         "Slug da Empresa no Trustvox:",
         value="alpfilm",
-        help="Exemplo: alpfilm, coty, etc. Montará https://app.trustvox.com.br/SUA_EMPRESA/products"
+        help="Exemplo: alpfilm, coty, etc."
     ).strip().lower()
 
     arquivo_enviado = st.file_uploader(
@@ -48,34 +53,28 @@ with st.sidebar:
     )
     
     st.divider()
-    st.subheader("⚙️ Parâmetros do Studio")
+    st.subheader("⚙️ Parâmetros")
     
     modo_validacao = st.radio(
         "Escopo de Validação",
         ["Amostragem em Blocos (~40%)", "Validar 100% dos Produtos"],
         index=0
     )
-    
-    tempo_preparacao = st.slider(
-        "Tempo para Login/Sessão (s)",
-        min_value=10, max_value=60, value=20, step=5
-    )
 
 # ---------------------------------------------------------
 # CORPO PRINCIPAL
 # ---------------------------------------------------------
 st.title("🛡️ Trustvox Migration Studio")
-st.caption("Validação inteligente de códigos migrados entre Trustvox e E-commerce")
+st.caption("Validação automática de migração de produtos")
 
-if arquivo_enviado is None or not slug_empresa:
-    st.info("👈 **Para começar:** Informe o slug da empresa e suba uma planilha de migração na barra lateral.")
+if arquivo_enviado is None or not slug_empresa or not usuario_trustvox or not senha_trustvox:
+    st.info("👈 **Para começar:** Preencha o e-mail, a senha, o slug da empresa e suba a planilha na barra lateral.")
 else:
     if arquivo_enviado.name.endswith('.csv'):
         df_input = pd.read_csv(arquivo_enviado)
     else:
         df_input = pd.read_excel(arquivo_enviado)
 
-    # Identificação inteligente de colunas
     cols_lista = list(df_input.columns)
     
     col_antigo_default = next(
@@ -93,15 +92,13 @@ else:
     with col_execucao:
         st.markdown("### 🎯 Central de Execução")
         
-        # Mapeamento manual de colunas
         col1_sel, col2_sel = st.columns(2)
         with col1_sel:
-            col_antigo = st.selectbox("Coluna de CÓDIGO ANTIGO (Trustvox):", cols_lista, index=cols_lista.index(col_antigo_default))
+            col_antigo = st.selectbox("Coluna CÓDIGO ANTIGO:", cols_lista, index=cols_lista.index(col_antigo_default))
         with col2_sel:
-            col_novo = st.selectbox("Coluna de CÓDIGO NOVO (Site):", cols_lista, index=cols_lista.index(col_novo_default))
+            col_novo = st.selectbox("Coluna CÓDIGO NOVO:", cols_lista, index=cols_lista.index(col_novo_default))
 
         st.markdown(f"**Empresa:** `{slug_empresa}`")
-        st.markdown(f"**URL Alvo:** `https://app.trustvox.com.br/{slug_empresa}/products`")
         st.markdown(f"**Arquivo:** `{arquivo_enviado.name}` ({len(df_input)} registros)")
 
         btn_iniciar = st.button("🚀 Iniciar Processamento", type="primary", use_container_width=True)
@@ -150,19 +147,31 @@ else:
 
         url_loja = f"https://app.trustvox.com.br/{slug_empresa}/products"
 
-        # Garante a instalação do Chromium no ambiente Linux da Nuvem
-        subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"])
+        # Instala dependências do Chromium no servidor Linux se necessário
+        try:
+            subprocess.run([sys.executable, "-m", "playwright", "install", "chromium", "--with-deps"], check=False)
+        except Exception:
+            pass
 
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
+            browser = await p.chromium.launch(
+                headless=True,
+                args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
+            )
             context = await browser.new_context()
             page = await context.new_page()
 
-            await page.goto("https://app.trustvox.com.br/")
+            # 1. AUTENTICAÇÃO AUTOMÁTICA NO TRUSTVOX
+            status_box.warning("🔑 Efetuando login no Trustvox...")
+            await page.goto("https://app.trustvox.com.br/users/sign_in", wait_until="domcontentloaded")
+            await page.wait_for_timeout(1000)
 
-            for s in range(tempo_preparacao, 0, -1):
-                status_box.warning(f"⏳ **Aguardando sessão no Trustvox...** ({s}s restantes)")
-                await asyncio.sleep(1)
+            # Preenche e-mail e senha
+            if await page.locator("input[type='email'], input[name*='email']").first.is_visible():
+                await page.fill("input[type='email'], input[name*='email']", usuario_trustvox)
+                await page.fill("input[type='password'], input[name*='password']", senha_trustvox)
+                await page.click("button[type='submit'], input[type='submit']")
+                await page.wait_for_timeout(3000)
 
             status_box.info(f"🚀 **Iniciando validação na loja {slug_empresa}...**")
 
@@ -180,7 +189,6 @@ else:
                     cod_novo = ""
 
                 linha_excel = idx + 2
-
                 status_val = "REPROVADO"
                 obs = ""
 
@@ -188,17 +196,14 @@ else:
                     await page.goto(url_loja, wait_until="domcontentloaded")
                     await page.wait_for_timeout(1000)
 
-                    # 1. Clica em 'Filtrar'
                     btn_filtrar = page.locator("button:has-text('Filtrar')").first
                     await btn_filtrar.click(timeout=8000)
                     await page.wait_for_timeout(500)
 
-                    # 2. Clica na opção 'Código do Produto'
                     opcao_codigo = page.locator("text=Código do Produto").first
                     await opcao_codigo.click(timeout=8000)
                     await page.wait_for_timeout(500)
 
-                    # 3. Digita EXCLUSIVAMENTE o código do produto na caixa flutuante do filtro
                     input_popup = page.locator("div[class*='popover'] input, div[class*='modal'] input, div[class*='filter'] input").first
                     if not await input_popup.is_visible():
                         input_popup = page.locator("input").filter(has_not=page.locator("header input")).last
@@ -207,12 +212,10 @@ else:
                     await input_popup.fill(cod_antigo)
                     await page.wait_for_timeout(400)
 
-                    # 4. Clica em 'Confirmar'
                     btn_confirmar = page.locator("button:has-text('Confirmar')").first
                     await btn_confirmar.click(timeout=5000)
                     await page.wait_for_timeout(2500)
 
-                    # 5. Clica no produto filtrado na tabela
                     linha_produto = page.locator(f"tr:has-text('{cod_antigo}'), tbody tr").first
                     
                     if await linha_produto.is_visible():
@@ -279,7 +282,7 @@ else:
             return df_input
 
     if btn_iniciar:
-        with st.spinner("Iniciando processamento no navegador..."):
+        with st.spinner("Conectando ao servidor e processando..."):
             df_final = asyncio.run(rodar_validacao())
             status_box.success("🎉 Validação concluída com sucesso!")
 

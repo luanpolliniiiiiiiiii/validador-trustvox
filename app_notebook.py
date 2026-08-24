@@ -2,6 +2,15 @@ import os
 import time
 import pandas as pd
 import streamlit as st
+
+
+try:
+    import setuptools._distutils as distutils
+    import sys
+    sys.modules['distutils'] = distutils
+except Exception:
+    pass
+
 import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -57,7 +66,7 @@ with st.sidebar:
 
 
 st.title("🛡️ Trustvox Migration Studio")
-st.caption("Validação automática de migração de produtos via Undetected Chrome")
+st.caption("Validação automática de migração de produtos")
 
 if arquivo_enviado is None or not slug_empresa or not usuario_trustvox or not senha_trustvox:
     st.info("👈 **Para começar:** Preencha o e-mail, a senha, o slug da empresa e suba a planilha na barra lateral.")
@@ -136,7 +145,6 @@ else:
         reprovados_count = 0
         url_loja = f"https://app.trustvox.com.br/{slug_empresa}/products"
 
-        
         options = uc.ChromeOptions()
         options.add_argument("--headless=new")
         options.add_argument("--no-sandbox")
@@ -152,7 +160,7 @@ else:
         wait = WebDriverWait(driver, 20)
 
         try:
-            
+            # 1. LOGIN INDETECTÁVEL
             status_box.warning("🔑 Conectando ao Trustvox via Undetected Chrome...")
             driver.get("https://app.trustvox.com.br/users/sign_in")
             time.sleep(3)
@@ -219,7 +227,7 @@ else:
 
                     time.sleep(1.5)
 
-                   
+                    
                     driver.execute_script("""
                         let els = Array.from(document.querySelectorAll('div, span, li, p, a'));
                         let el = els.find(x => x.children.length === 0 && x.innerText && x.innerText.trim() === 'Código do Produto');
@@ -227,7 +235,7 @@ else:
                     """)
                     time.sleep(1.5)
 
-                    
+                   
                     preencheu = driver.execute_script("""
                         let val = arguments[0];
                         let inputs = Array.from(document.querySelectorAll('input'));
@@ -256,7 +264,7 @@ else:
                     """)
                     time.sleep(4)
 
-                    
+                  
                     clicou_linha = driver.execute_script("""
                         let code = arguments[0];
                         let elements = Array.from(document.querySelectorAll('tbody tr, tr, div[class*="table"] div'));

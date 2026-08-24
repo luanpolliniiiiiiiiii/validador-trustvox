@@ -1,5 +1,7 @@
 import asyncio
 import os
+import subprocess
+import sys
 import pandas as pd
 import streamlit as st
 from playwright.async_api import async_playwright
@@ -12,6 +14,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# Estilização CSS customizada
 st.markdown("""
 <style>
     .stApp { background-color: #0f1117; color: #e6e6e6; }
@@ -72,7 +75,7 @@ else:
     else:
         df_input = pd.read_excel(arquivo_enviado)
 
-    # Identificação inteligente com prioridade para CÓDIGO / ID
+    # Identificação inteligente de colunas
     cols_lista = list(df_input.columns)
     
     col_antigo_default = next(
@@ -90,7 +93,7 @@ else:
     with col_execucao:
         st.markdown("### 🎯 Central de Execução")
         
-        # Mapeamento manual das colunas para garantia de acerto
+        # Mapeamento manual de colunas
         col1_sel, col2_sel = st.columns(2)
         with col1_sel:
             col_antigo = st.selectbox("Coluna de CÓDIGO ANTIGO (Trustvox):", cols_lista, index=cols_lista.index(col_antigo_default))
@@ -147,6 +150,9 @@ else:
 
         url_loja = f"https://app.trustvox.com.br/{slug_empresa}/products"
 
+        # Garante a instalação do Chromium no ambiente Linux da Nuvem
+        subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"])
+
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
             context = await browser.new_context()
@@ -155,13 +161,12 @@ else:
             await page.goto("https://app.trustvox.com.br/")
 
             for s in range(tempo_preparacao, 0, -1):
-                status_box.warning(f"⏳ **Faça login no Trustvox se necessário...** ({s}s restantes)")
+                status_box.warning(f"⏳ **Aguardando sessão no Trustvox...** ({s}s restantes)")
                 await asyncio.sleep(1)
 
             status_box.info(f"🚀 **Iniciando validação na loja {slug_empresa}...**")
 
             for cont, idx in enumerate(indices, start=1):
-                # Garante que o valor extraído é tratado estritamente como CÓDIGO (limpo de casas decimais do pandas caso seja número)
                 val_raw = df_input.at[idx, col_antigo_name]
                 if pd.notna(val_raw):
                     cod_antigo = str(int(val_raw)).strip() if isinstance(val_raw, (int, float)) and val_raw == val_raw else str(val_raw).strip()

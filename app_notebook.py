@@ -10,7 +10,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
 from webdriver_manager.core.os_manager import ChromeType
 
-
+# Configuração da página estilo NotebookLM Studio
 st.set_page_config(
     page_title="Trustvox Studio | NotebookLM Style",
     page_icon="📚",
@@ -31,7 +31,9 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-
+# ---------------------------------------------------------
+# PAINEL ESQUERDO (SIDEBAR - CREDENCIAIS & CONFIGURAÇÕES)
+# ---------------------------------------------------------
 with st.sidebar:
     st.title("🔑 Acesso ao Trustvox")
     usuario_trustvox = st.text_input("E-mail do Trustvox:", placeholder="seu-email@empresa.com")
@@ -58,9 +60,11 @@ with st.sidebar:
         index=0
     )
 
-
+# ---------------------------------------------------------
+# CORPO PRINCIPAL
+# ---------------------------------------------------------
 st.title("🛡️ Trustvox Migration Studio")
-st.caption("Validação automática de migração de produtos via busca direta por URL")
+st.caption("Validação automática de migração de produtos")
 
 if arquivo_enviado is None or not slug_empresa or not usuario_trustvox or not senha_trustvox:
     st.info("👈 **Para começar:** Preencha o e-mail, a senha, o slug da empresa e suba a planilha na barra lateral.")
@@ -118,6 +122,7 @@ else:
 
         aprovados_count = 0
         reprovados_count = 0
+        url_loja = f"https://app.trustvox.com.br/{slug_empresa}/products"
 
         options = webdriver.ChromeOptions()
         options.add_argument("--headless=new")
@@ -135,7 +140,7 @@ else:
         wait = WebDriverWait(driver, 15)
 
         try:
-            # 1. LOGIN AUTOMÁTICO
+            # 1. LOGIN AUTOMÁTICO NO TRUSTVOX
             status_box.warning("🔑 Efetuando login no Trustvox...")
             driver.get("https://app.trustvox.com.br/users/sign_in")
             time.sleep(3)
@@ -174,30 +179,70 @@ else:
                 obs = ""
 
                 try:
-                    # BUSCA DIRETA PELA URL COM O CÓDIGO (Sem usar pop-ups)
-                    url_busca = f"https://app.trustvox.com.br/{slug_empresa}/products?code={cod_antigo}"
-                    driver.get(url_busca)
-                    time.sleep(3)
+                    driver.get(url_loja)
+                    time.sleep(3.5)
 
-                    # Localiza a linha do produto retornado na tabela
+                    # Passo 1: Dispara o evento de clique no botão 'Filtrar'
+                    driver.execute_script("""
+                        let btn = Array.from(document.querySelectorAll('button')).find(x => x.innerText && x.innerText.includes('Filtrar'));
+                        if (btn) {
+                            btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+                        }
+                    """)
+                    time.sleep(2)
+
+                    # Passo 2: Clica especificamente no elemento 'Código do Produto'
+                    driver.execute_script("""
+                        let el = Array.from(document.querySelectorAll('*')).find(x => x.children.length === 0 && x.innerText && x.innerText.trim() === 'Código do Produto');
+                        if (el) {
+                            el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+                        }
+                    """)
+                    time.sleep(2)
+
+                    # Passo 3: Preenche o input do código do produto acionando os eventos do React
+                    preencheu = driver.execute_script("""
+                        let input = document.querySelector('input[type="text"]:not(header input), div[class*="popover"] input, div[class*="modal"] input');
+                        if (!input) {
+                            let allInputs = Array.from(document.querySelectorAll('input'));
+                            input = allInputs.find(i => !i.closest('header'));
+                        }
+                        if (input) {
+                            input.focus();
+                            let nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                            nativeSetter.call(input, arguments[0]);
+                            input.dispatchEvent(new Event('input', { bubbles: true }));
+                            input.dispatchEvent(new Event('change', { bubbles: true }));
+                            return true;
+                        }
+                        return false;
+                    """, cod_antigo)
+
+                    if not preencheu:
+                        raise Exception("Modal de busca do filtro não foi aberto na interface")
+
+                    time.sleep(1)
+
+                    # Passo 4: Clica no botão 'Confirmar'
+                    driver.execute_script("""
+                        let btn = Array.from(document.querySelectorAll('button')).find(x => x.innerText && x.innerText.trim() === 'Confirmar');
+                        if (btn) {
+                            btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+                        }
+                    """)
+                    time.sleep(4)
+
+                    # Passo 5: Verifica o produto filtrado na tabela
                     linhas = driver.find_elements(By.XPATH, f"//tr[contains(.,'{cod_antigo}')]")
-                    
-                    if not linhas:
-                        # Tentativa com busca geral caso a URL com ?code exija formato diferente
-                        url_busca_alt = f"https://app.trustvox.com.br/{slug_empresa}/products?query={cod_antigo}"
-                        driver.get(url_busca_alt)
-                        time.sleep(3)
-                        linhas = driver.find_elements(By.XPATH, f"//tr[contains(.,'{cod_antigo}')]")
 
                     if linhas:
                         driver.execute_script("arguments[0].click();", linhas[0])
-                        time.sleep(2.5)
+                        time.sleep(3)
 
-                        
+                        # Clica no Link Original
                         handles_antes = driver.window_handles
                         clicou_link = driver.execute_script("""
-                            let els = Array.from(document.querySelectorAll('a, button, span, div'));
-                            let link = els.find(x => x.innerText && x.innerText.includes('Link original'));
+                            let link = Array.from(document.querySelectorAll('a, button, span, div')).find(x => x.innerText && x.innerText.includes('Link original'));
                             if (link) { link.click(); return true; }
                             return false;
                         """)
@@ -239,7 +284,7 @@ else:
                         else:
                             obs = "Aba externa do produto não abriu"
                     else:
-                        obs = f"Código {cod_antigo} não encontrado no Trustvox"
+                        obs = f"Código {cod_antigo} não encontrado na tabela pós-filtro"
 
                 except Exception as e:
                     erro_str = str(e).split("\n")[0].split("Stacktrace:")[0].strip()

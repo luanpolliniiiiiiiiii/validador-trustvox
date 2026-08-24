@@ -32,17 +32,15 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# PAINEL ESQUERDO (SIDEBAR - CREDENCIAIS & CONFIGURAÇÕES)
+# PAINEL ESQUERDO (SIDEBAR)
 # ---------------------------------------------------------
 with st.sidebar:
     st.title("🔑 Acesso ao Trustvox")
-    
     usuario_trustvox = st.text_input("E-mail do Trustvox:", placeholder="seu-email@empresa.com")
     senha_trustvox = st.text_input("Senha do Trustvox:", type="password")
 
     st.divider()
     st.title("📚 Empresa & Planilha")
-    
     slug_empresa = st.text_input(
         "Slug da Empresa no Trustvox:",
         value="coty",
@@ -51,13 +49,11 @@ with st.sidebar:
 
     arquivo_enviado = st.file_uploader(
         "Carregar Planilha De/Para",
-        type=["xlsx", "csv"],
-        help="Suba a planilha com os códigos antigos e novos"
+        type=["xlsx", "csv"]
     )
     
     st.divider()
     st.subheader("⚙️ Parâmetros")
-    
     modo_validacao = st.radio(
         "Escopo de Validação",
         ["Amostragem em Blocos (~40%)", "Validar 100% dos Produtos"],
@@ -68,7 +64,7 @@ with st.sidebar:
 # CORPO PRINCIPAL
 # ---------------------------------------------------------
 st.title("🛡️ Trustvox Migration Studio")
-st.caption("Validação automática de migração de produtos")
+st.caption("Validação automática de migração de produtos via Injeção de JS")
 
 if arquivo_enviado is None or not slug_empresa or not usuario_trustvox or not senha_trustvox:
     st.info("👈 **Para começar:** Preencha o e-mail, a senha, o slug da empresa e suba a planilha na barra lateral.")
@@ -79,31 +75,20 @@ else:
         df_input = pd.read_excel(arquivo_enviado)
 
     cols_lista = list(df_input.columns)
-    
-    col_antigo_default = next(
-        (c for c in cols_lista if any(k in str(c).lower() for k in ['cod_antigo', 'código antigo', 'codigo antigo', 'id antigo', 'id_antigo'])),
-        next((c for c in cols_lista if any(k in str(c).lower() for k in ['antigo', 'de', 'old'])), cols_lista[0])
-    )
-    
-    col_novo_default = next(
-        (c for c in cols_lista if any(k in str(c).lower() for k in ['cod_novo', 'código novo', 'codigo novo', 'id novo', 'id_novo'])),
-        next((c for c in cols_lista if any(k in str(c).lower() for k in ['novo', 'para', 'new'])), cols_lista[1] if len(cols_lista) > 1 else cols_lista[0])
-    )
+    col_antigo_default = next((c for c in cols_lista if any(k in str(c).lower() for k in ['cod_antigo', 'código antigo', 'codigo antigo', 'id antigo', 'id_antigo'])), cols_lista[0])
+    col_novo_default = next((c for c in cols_lista if any(k in str(c).lower() for k in ['cod_novo', 'código novo', 'codigo novo', 'id novo', 'id_novo'])), cols_lista[1] if len(cols_lista) > 1 else cols_lista[0])
 
     col_execucao, col_analytics = st.columns([1.1, 0.9], gap="large")
 
     with col_execucao:
         st.markdown("### 🎯 Central de Execução")
-        
         col1_sel, col2_sel = st.columns(2)
         with col1_sel:
             col_antigo = st.selectbox("Coluna CÓDIGO ANTIGO:", cols_lista, index=cols_lista.index(col_antigo_default))
         with col2_sel:
             col_novo = st.selectbox("Coluna CÓDIGO NOVO:", cols_lista, index=cols_lista.index(col_novo_default))
 
-        st.markdown(f"**Empresa:** `{slug_empresa}`")
-        st.markdown(f"**Arquivo:** `{arquivo_enviado.name}` ({len(df_input)} registros)")
-
+        st.markdown(f"**Empresa:** `{slug_empresa}` | **Arquivo:** `{arquivo_enviado.name}`")
         btn_iniciar = st.button("🚀 Iniciar Processamento", type="primary", use_container_width=True)
         
         status_box = st.empty()
@@ -112,7 +97,6 @@ else:
 
     with col_analytics:
         st.markdown("### 📊 Painel de Insights")
-        
         m1, m2, m3 = st.columns(3)
         with m1:
             kpi_total = st.empty()
@@ -123,20 +107,12 @@ else:
         with m3:
             kpi_err = st.empty()
             kpi_err.metric("Reprovados", "0")
-
         st.divider()
         st.markdown("### 📝 Tabela ao Vivo")
         tabela_live = st.empty()
 
     def rodar_validacao():
-        col_antigo_name = col_antigo
-        col_novo_name = col_novo
-
-        df_input['Status Validação'] = 'Não Testado'
-        df_input['Observação Validação'] = '-'
-
         total_rows = len(df_input)
-
         if "100%" in modo_validacao:
             indices = list(range(total_rows))
         else:
@@ -146,7 +122,6 @@ else:
 
         aprovados_count = 0
         reprovados_count = 0
-
         url_loja = f"https://app.trustvox.com.br/{slug_empresa}/products"
 
         options = webdriver.ChromeOptions()
@@ -158,55 +133,46 @@ else:
         options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
 
         try:
-            driver = webdriver.Chrome(
-                service=Service(ChromeDriverManager(chrome_type=ChromeType.CHROMIUM).install()),
-                options=options
-            )
+            driver = webdriver.Chrome(service=Service(ChromeDriverManager(chrome_type=ChromeType.CHROMIUM).install()), options=options)
         except Exception:
             driver = webdriver.Chrome(options=options)
 
-        wait = WebDriverWait(driver, 12)
+        wait = WebDriverWait(driver, 15)
 
         try:
-            # 1. AUTENTICAÇÃO NO TRUSTVOX
+            # 1. LOGIN AUTOMÁTICO
             status_box.warning("🔑 Efetuando login no Trustvox...")
             driver.get("https://app.trustvox.com.br/users/sign_in")
             time.sleep(3)
 
             try:
-                email_field = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "input#user_email, input[name='user[email]'], input[type='email']")))
+                email_field = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "input#user_email, input[type='email']")))
                 email_field.clear()
                 email_field.send_keys(usuario_trustvox)
 
-                pass_field = driver.find_element(By.CSS_SELECTOR, "input#user_password, input[name='user[password]'], input[type='password']")
+                pass_field = driver.find_element(By.CSS_SELECTOR, "input#user_password, input[type='password']")
                 pass_field.clear()
                 pass_field.send_keys(senha_trustvox)
 
                 submit_btn = driver.find_element(By.CSS_SELECTOR, "input[type='submit'], button[type='submit']")
-                submit_btn.click()
-                time.sleep(4)
+                driver.execute_script("arguments[0].click();", submit_btn)
+                time.sleep(5)
             except Exception as login_err:
-                status_box.error(f"Erro ao preencher credenciais: {str(login_err)}")
+                status_box.error(f"Erro no login: {str(login_err)}")
 
             if "sign_in" in driver.current_url:
-                status_box.error("❌ Falha na autenticação do Trustvox! Verifique o e-mail e senha informados.")
+                status_box.error("❌ Falha na autenticação do Trustvox! Verifique as credenciais.")
                 driver.quit()
                 return df_input
 
-            status_box.info(f"🚀 **Login concluído! Iniciando validação na loja {slug_empresa}...**")
+            status_box.info(f"🚀 **Login concluído! Analisando {len(indices)} produtos...**")
 
             for cont, idx in enumerate(indices, start=1):
-                val_raw = df_input.at[idx, col_antigo_name]
-                if pd.notna(val_raw):
-                    cod_antigo = str(int(val_raw)).strip() if isinstance(val_raw, (int, float)) and val_raw == val_raw else str(val_raw).strip()
-                else:
-                    cod_antigo = ""
+                val_raw = df_input.at[idx, col_antigo]
+                cod_antigo = str(int(val_raw)).strip() if pd.notna(val_raw) and isinstance(val_raw, (int, float)) else str(val_raw).strip() if pd.notna(val_raw) else ""
 
-                val_novo_raw = df_input.at[idx, col_novo_name]
-                if pd.notna(val_novo_raw):
-                    cod_novo = str(int(val_novo_raw)).strip() if isinstance(val_novo_raw, (int, float)) and val_novo_raw == val_novo_raw else str(val_novo_raw).strip()
-                else:
-                    cod_novo = ""
+                val_novo_raw = df_input.at[idx, col_novo]
+                cod_novo = str(int(val_novo_raw)).strip() if pd.notna(val_novo_raw) and isinstance(val_novo_raw, (int, float)) else str(val_novo_raw).strip() if pd.notna(val_novo_raw) else ""
 
                 linha_excel = idx + 2
                 status_val = "REPROVADO"
@@ -214,119 +180,113 @@ else:
 
                 try:
                     driver.get(url_loja)
-                    time.sleep(3)
+                    time.sleep(3.5)
 
-                    # 1. Clica no botão Filtrar (Nativo + Fallback JS)
-                    try:
-                        btn_filtrar = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[descendant-or-self::*[contains(text(),'Filtrar')]]")))
-                        btn_filtrar.click()
-                    except Exception:
-                        driver.execute_script("""
-                            let btns = Array.from(document.querySelectorAll('button'));
-                            let b = btns.find(x => x.innerText && x.innerText.includes('Filtrar'));
-                            if (b) b.click();
-                        """)
-                    time.sleep(2)
+                    # INJEÇÃO JS 1: Botão Filtrar
+                    driver.execute_script("""
+                        let btns = Array.from(document.querySelectorAll('button'));
+                        let b = btns.find(x => x.innerText && x.innerText.includes('Filtrar'));
+                        if (b) b.click();
+                    """)
+                    time.sleep(1.5)
 
-                    # 2. Clica na opção 'Código do Produto'
-                    try:
-                        opcao_codigo = wait.until(EC.element_to_be_clickable((By.XPATH, "//*[contains(text(),'Código do Produto')]")))
-                        opcao_codigo.click()
-                    except Exception:
-                        driver.execute_script("""
-                            let els = Array.from(document.querySelectorAll('*'));
-                            let el = els.find(x => x.children.length === 0 && x.innerText && x.innerText.includes('Código do Produto'));
-                            if (el) el.click();
-                        """)
-                    time.sleep(2)
+                    # INJEÇÃO JS 2: Botão Código do Produto
+                    driver.execute_script("""
+                        let els = Array.from(document.querySelectorAll('*'));
+                        let el = els.find(x => x.children.length === 0 && x.innerText && x.innerText.includes('Código do Produto'));
+                        if (el) el.click();
+                    """)
+                    time.sleep(1.5)
 
-                    # 3. Localiza e preenche qualquer campo de texto visível criado no pop-up
-                    input_popup = None
-                    inputs_encontrados = driver.find_elements(By.TAG_NAME, "input")
-                    
-                    for inp in inputs_encontrados:
-                        try:
-                            # Ignora inputs do cabeçalho superior e busca inputs visíveis
-                            if inp.is_displayed() and inp.get_attribute("type") in ["text", "search", None, ""]:
-                                parent_class = inp.find_element(By.XPATH, "./..").get_attribute("class") or ""
-                                if "header" not in parent_class.lower():
-                                    input_popup = inp
-                                    break
-                        except Exception:
-                            continue
+                    # INJEÇÃO JS 3: Input do Modal (Forçando atualização no Framework React)
+                    preencheu = driver.execute_script("""
+                        let inputs = Array.from(document.querySelectorAll('input'));
+                        let modalInput = inputs.find(i => i.closest('[class*="popover"], [class*="modal"], [role="dialog"], [class*="menu"], [class*="filter"]'));
+                        if (!modalInput) modalInput = inputs.find(i => !i.closest('header') && i.type === 'text');
+                        
+                        if (modalInput) {
+                            let setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+                            setter.call(modalInput, arguments[0]);
+                            modalInput.dispatchEvent(new Event('input', { bubbles: true }));
+                            modalInput.dispatchEvent(new Event('change', { bubbles: true }));
+                            return true;
+                        }
+                        return false;
+                    """, cod_antigo)
 
-                    if not input_popup:
-                        # Busca direta por fallback
-                        input_popup = wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, "div[class*='popover'] input, div[class*='modal'] input, div[class*='filter'] input")))
-
-                    input_popup.clear()
-                    input_popup.send_keys(cod_antigo)
+                    if not preencheu:
+                        raise Exception("Input do pop-up não localizado pela injeção JS.")
                     time.sleep(1)
 
-                    # 4. Clica no botão azul 'Confirmar'
-                    try:
-                        btn_confirmar = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(.,'Confirmar')]")))
-                        btn_confirmar.click()
-                    except Exception:
-                        driver.execute_script("""
-                            let btns = Array.from(document.querySelectorAll('button'));
-                            let b = btns.find(x => x.innerText && x.innerText.includes('Confirmar'));
-                            if (b) b.click();
-                        """)
+                    # INJEÇÃO JS 4: Botão Confirmar
+                    driver.execute_script("""
+                        let btns = Array.from(document.querySelectorAll('button'));
+                        let b = btns.find(x => x.innerText && x.innerText.includes('Confirmar'));
+                        if (b) b.click();
+                    """)
                     time.sleep(4)
 
-                    # 5. Localiza e valida a linha do produto
+                    # 5. Localizar linha na tabela
                     linhas = driver.find_elements(By.XPATH, f"//tr[contains(.,'{cod_antigo}')]")
                     if linhas:
-                        linhas[0].click()
-                        time.sleep(2.5)
+                        driver.execute_script("arguments[0].click();", linhas[0])
+                        time.sleep(3)
 
-                        try:
-                            link_original = wait.until(EC.element_to_be_clickable((By.XPATH, "//*[contains(text(),'Link original')]")))
-                            handles_antes = driver.window_handles
-                            link_original.click()
-                            time.sleep(3.5)
-                            handles_depois = driver.window_handles
+                        # INJEÇÃO JS 5: Link Original
+                        handles_antes = driver.window_handles
+                        clicou_link = driver.execute_script("""
+                            let els = Array.from(document.querySelectorAll('a, button, span, div'));
+                            let link = els.find(x => x.innerText && x.innerText.includes('Link original'));
+                            if (link) {
+                                link.click();
+                                return true;
+                            }
+                            return false;
+                        """)
+                        
+                        if not clicou_link:
+                            raise Exception("Botão 'Link original' não foi encontrado na aba lateral.")
+                            
+                        time.sleep(4)
+                        handles_depois = driver.window_handles
 
-                            if len(handles_depois) > len(handles_antes):
-                                driver.switch_to.window(handles_depois[-1])
-                                time.sleep(3)
+                        if len(handles_depois) > len(handles_antes):
+                            driver.switch_to.window(handles_depois[-1])
+                            time.sleep(4)
 
-                                product_id_console = driver.execute_script("""
-                                    if (window._trustvox && Array.isArray(window._trustvox)) {
-                                        for (let item of window._trustvox) {
-                                            if (Array.isArray(item) && item[0] === '_productId') {
-                                                return String(item[1]);
-                                            }
-                                        }
+                            product_id_console = driver.execute_script("""
+                                if (window._trustvox && Array.isArray(window._trustvox)) {
+                                    for (let item of window._trustvox) {
+                                        if (Array.isArray(item) && item[0] === '_productId') return String(item[1]);
                                     }
-                                    if (window._trustvox && typeof window._trustvox === 'object') {
-                                        return String(window._trustvox._productId || window._trustvox.product_id || '');
-                                    }
-                                    return null;
-                                """)
+                                }
+                                if (window._trustvox && typeof window._trustvox === 'object') {
+                                    return String(window._trustvox._productId || window._trustvox.product_id || '');
+                                }
+                                return null;
+                            """)
 
-                                html_site = driver.page_source
-                                driver.close()
-                                driver.switch_to.window(handles_antes[0])
+                            html_site = driver.page_source
+                            driver.close()
+                            driver.switch_to.window(handles_antes[0])
 
-                                if product_id_console and product_id_console.strip() == cod_novo:
-                                    status_val = "APROVADO"
-                                    obs = f"_productId ({product_id_console}) verificado no site"
-                                elif cod_novo in html_site:
-                                    status_val = "APROVADO"
-                                    obs = "Código novo localizado no HTML da página"
-                                else:
-                                    obs = f"Esperado: {cod_novo} | Retornado: {product_id_console}"
+                            if product_id_console and product_id_console.strip() == cod_novo:
+                                status_val = "APROVADO"
+                                obs = f"_productId ({product_id_console}) verificado no site"
+                            elif cod_novo in html_site:
+                                status_val = "APROVADO"
+                                obs = "Código novo localizado no HTML da página"
                             else:
-                                obs = "Não foi possível abrir a aba do site oficial"
-                        except Exception:
-                            obs = "Produto localizado no Trustvox, mas falhou ao abrir o Link Original"
+                                obs = f"Esperado: {cod_novo} | Retornado: {product_id_console}"
+                        else:
+                            obs = "Nova aba da loja externa não abriu (Possível bloqueio de pop-up)."
                     else:
-                        obs = f"Código {cod_antigo} não retornado na tabela após aplicar filtro"
+                        obs = f"Produto {cod_antigo} não retornado na tabela após aplicar filtro."
 
                 except Exception as e:
-                    obs = str(e)
+                    # Formata erros genéricos retirando o stacktrace monstruoso
+                    erro_str = str(e).split("\n")[0].split("Stacktrace:")[0].strip()
+                    obs = f"Erro JS/Navegação: {erro_str}"
 
                 if status_val == "APROVADO":
                     aprovados_count += 1
@@ -341,7 +301,6 @@ else:
                 kpi_total.metric("Analisados", f"{cont}/{len(indices)}")
                 kpi_ok.metric("Aprovados", f"{aprovados_count}")
                 kpi_err.metric("Reprovados", f"{reprovados_count}")
-
                 progress_bar.progress(cont / len(indices))
 
         finally:

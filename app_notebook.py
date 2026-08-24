@@ -44,7 +44,7 @@ with st.sidebar:
     proxy_server = st.text_input(
         "Servidor Proxy (IP:Porta ou user:pass@IP:Porta):",
         placeholder="ex: mxjcpfer:f080q5vj4ys9@198.23.243.226:6361",
-        help="Insira o proxy residencial para bypass de nuvem"
+        help="Insira no formato usuario:senha@IP:Porta"
     ).strip()
 
     st.divider()
@@ -178,7 +178,7 @@ else:
             driver = webdriver.Chrome(options=options)
 
         driver.set_page_load_timeout(35)
-        wait = WebDriverWait(driver, 20)
+        wait = WebDriverWait(driver, 15)
 
         try:
             status_box.warning("🔑 Autenticando no Trustvox...")
@@ -236,41 +236,22 @@ else:
 
                 try:
                     driver.get(url_loja)
-                    time.sleep(4)
 
-                    # STEP 1: Clica no botão "Filtrar"
-                    clicou_filtrar = driver.execute_script("""
-                        let btns = Array.from(document.querySelectorAll('button, div, span, a'));
-                        let b = btns.find(x => x.innerText && x.innerText.trim().toLowerCase() === 'filtrar');
-                        if (b) {
-                            b.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-                            return true;
-                        }
-                        return false;
-                    """)
+                    # 1. Aguarda dinamicamente o botão "Filtrar" estar presente e clicável no DOM
+                    btn_filtrar = wait.until(EC.element_to_be_clickable((
+                        By.XPATH, "//button[contains(normalize-space(),'Filtrar')] | //*[contains(text(),'Filtrar')]"
+                    )))
+                    driver.execute_script("arguments[0].click();", btn_filtrar)
+                    time.sleep(1.5)
 
-                    if not clicou_filtrar:
-                        raise Exception("Botão 'Filtrar' não localizado no topo da página.")
+                    # 2. Aguarda dinamicamente a opção "Código do Produto" no menu popover
+                    opcao_codigo = wait.until(EC.element_to_be_clickable((
+                        By.XPATH, "//*[contains(normalize-space(),'Código do Produto') or contains(text(),'Código do Produto')]"
+                    )))
+                    driver.execute_script("arguments[0].click();", opcao_codigo)
+                    time.sleep(1.5)
 
-                    time.sleep(2)
-
-                    # STEP 2: Clica em "Código do Produto" no popover
-                    clicou_opcao = driver.execute_script("""
-                        let elements = Array.from(document.querySelectorAll('div, span, li, p, a, button'));
-                        let el = elements.find(x => x.innerText && x.innerText.trim().toLowerCase().includes('código do produto'));
-                        if (el) {
-                            el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-                            return true;
-                        }
-                        return false;
-                    """)
-
-                    if not clicou_opcao:
-                        raise Exception("Opção 'Código do Produto' não localizada no menu suspenso.")
-
-                    time.sleep(2)
-
-                    # STEP 3: Preenche o código antigo no input do card
+                    # 3. Preenche o código antigo no input do modal/popover
                     preencheu = driver.execute_script("""
                         let val = arguments[0];
                         let inputs = Array.from(document.querySelectorAll('input'));
@@ -287,27 +268,18 @@ else:
                     """, cod_antigo)
 
                     if not preencheu:
-                        raise Exception("Campo de texto para digitar o código não encontrado no modal.")
+                        raise Exception("Campo de texto para digitar o código não localizado no modal.")
 
                     time.sleep(1)
 
-                    # STEP 4: Clica no botão azul "Confirmar"
-                    clicou_confirmar = driver.execute_script("""
-                        let btns = Array.from(document.querySelectorAll('button, input[type="submit"], a, div'));
-                        let b = btns.find(x => x.innerText && x.innerText.trim().toLowerCase() === 'confirmar');
-                        if (b) {
-                            b.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-                            return true;
-                        }
-                        return false;
-                    """)
-
-                    if not clicou_confirmar:
-                        raise Exception("Botão 'Confirmar' não localizado no modal de filtro.")
-
+                    # 4. Aguarda dinamicamente e clica no botão azul "Confirmar"
+                    btn_confirmar = wait.until(EC.element_to_be_clickable((
+                        By.XPATH, "//button[contains(normalize-space(),'Confirmar')] | //*[contains(text(),'Confirmar')]"
+                    )))
+                    driver.execute_script("arguments[0].click();", btn_confirmar)
                     time.sleep(4)
 
-                    # STEP 5: Clica na linha da tabela contendo o código
+                    # 5. Clica na linha da tabela contendo o código
                     clicou_linha = driver.execute_script("""
                         let code = arguments[0];
                         let elements = Array.from(document.querySelectorAll('tbody tr, tr'));

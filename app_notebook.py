@@ -180,9 +180,9 @@ else:
 
                 try:
                     driver.get(url_loja)
-                    time.sleep(3.5)
+                    time.sleep(3)
 
-                    # Passo 1: Dispara o evento de clique no botão 'Filtrar'
+                    # Passo 1: Clica no botão 'Filtrar'
                     driver.execute_script("""
                         let btn = Array.from(document.querySelectorAll('button')).find(x => x.innerText && x.innerText.includes('Filtrar'));
                         if (btn) {
@@ -191,7 +191,7 @@ else:
                     """)
                     time.sleep(2)
 
-                    # Passo 2: Clica especificamente no elemento 'Código do Produto'
+                    # Passo 2: Clica em 'Código do Produto'
                     driver.execute_script("""
                         let el = Array.from(document.querySelectorAll('*')).find(x => x.children.length === 0 && x.innerText && x.innerText.trim() === 'Código do Produto');
                         if (el) {
@@ -200,7 +200,7 @@ else:
                     """)
                     time.sleep(2)
 
-                    # Passo 3: Preenche o input do código do produto acionando os eventos do React
+                    # Passo 3: Preenche o código no modal do filtro
                     preencheu = driver.execute_script("""
                         let input = document.querySelector('input[type="text"]:not(header input), div[class*="popover"] input, div[class*="modal"] input');
                         if (!input) {
@@ -223,23 +223,32 @@ else:
 
                     time.sleep(1)
 
-                    # Passo 4: Clica no botão 'Confirmar'
+                    # Passo 4: Clica em 'Confirmar'
                     driver.execute_script("""
                         let btn = Array.from(document.querySelectorAll('button')).find(x => x.innerText && x.innerText.trim() === 'Confirmar');
                         if (btn) {
                             btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
                         }
                     """)
-                    time.sleep(4)
+                    time.sleep(4.5)
 
-                    # Passo 5: Verifica o produto filtrado na tabela
-                    linhas = driver.find_elements(By.XPATH, f"//tr[contains(.,'{cod_antigo}')]")
+                    # Passo 5: Clica no produto encontrado (Injeção JS direta na tabela/linha)
+                    clicou_produto = driver.execute_script("""
+                        let code = arguments[0];
+                        // Procura qualquer linha de tabela ou card contendo o código exato
+                        let rows = Array.from(document.querySelectorAll('tr, tbody tr, div[class*="row"], div[class*="item"]'));
+                        let target = rows.find(r => r.innerText && r.innerText.includes(code));
+                        if (target) {
+                            target.click();
+                            return true;
+                        }
+                        return false;
+                    """, cod_antigo)
 
-                    if linhas:
-                        driver.execute_script("arguments[0].click();", linhas[0])
+                    if clicou_produto:
                         time.sleep(3)
 
-                        # Clica no Link Original
+                        # Passo 6: Clica no botão 'Link original'
                         handles_antes = driver.window_handles
                         clicou_link = driver.execute_script("""
                             let link = Array.from(document.querySelectorAll('a, button, span, div')).find(x => x.innerText && x.innerText.includes('Link original'));

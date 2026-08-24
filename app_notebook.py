@@ -165,10 +165,10 @@ else:
         except Exception:
             driver = webdriver.Chrome(options=options)
 
-        wait = WebDriverWait(driver, 15)
+        wait = WebDriverWait(driver, 12)
 
         try:
-            # 1. LOGIN AUTOMÁTICO NO TRUSTVOX
+            # 1. AUTENTICAÇÃO NO TRUSTVOX
             status_box.warning("🔑 Efetuando login no Trustvox...")
             driver.get("https://app.trustvox.com.br/users/sign_in")
             time.sleep(3)
@@ -183,8 +183,8 @@ else:
                 pass_field.send_keys(senha_trustvox)
 
                 submit_btn = driver.find_element(By.CSS_SELECTOR, "input[type='submit'], button[type='submit']")
-                driver.execute_script("arguments[0].click();", submit_btn)
-                time.sleep(5)
+                submit_btn.click()
+                time.sleep(4)
             except Exception as login_err:
                 status_box.error(f"Erro ao preencher credenciais: {str(login_err)}")
 
@@ -214,68 +214,78 @@ else:
 
                 try:
                     driver.get(url_loja)
-                    time.sleep(3.5)
+                    time.sleep(3)
 
-                    # 1. Clica no Botão 'Filtrar' (Busca ampla por classe ou texto)
+                    # 1. Clica no botão Filtrar (Nativo + Fallback JS)
                     try:
-                        btn_filtrar = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[descendant-or-self::*[contains(text(),'Filtrar') or contains(@class,'filter')]]")))
-                        driver.execute_script("arguments[0].click();", btn_filtrar)
-                        time.sleep(1.5)
+                        btn_filtrar = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[descendant-or-self::*[contains(text(),'Filtrar')]]")))
+                        btn_filtrar.click()
                     except Exception:
-                        # Fallback JS direto
                         driver.execute_script("""
                             let btns = Array.from(document.querySelectorAll('button'));
-                            let b = btns.find(x => x.innerText.includes('Filtrar'));
+                            let b = btns.find(x => x.innerText && x.innerText.includes('Filtrar'));
                             if (b) b.click();
                         """)
-                        time.sleep(1.5)
+                    time.sleep(2)
 
-                    # 2. Clica na Opção 'Código do Produto'
+                    # 2. Clica na opção 'Código do Produto'
                     try:
                         opcao_codigo = wait.until(EC.element_to_be_clickable((By.XPATH, "//*[contains(text(),'Código do Produto')]")))
-                        driver.execute_script("arguments[0].click();", opcao_codigo)
-                        time.sleep(1.5)
+                        opcao_codigo.click()
                     except Exception:
                         driver.execute_script("""
                             let els = Array.from(document.querySelectorAll('*'));
                             let el = els.find(x => x.children.length === 0 && x.innerText && x.innerText.includes('Código do Produto'));
                             if (el) el.click();
                         """)
-                        time.sleep(1.5)
+                    time.sleep(2)
 
-                    # 3. Digita o ID no Input do Modal/Pop-up
-                    try:
-                        input_popup = wait.until(EC.presence_of_element_located((By.XPATH, "//div[contains(@class,'popover') or contains(@class,'modal') or contains(@class,'filter') or contains(@class,'dropdown')]//input | //input[@type='text']")))
-                        input_popup.clear()
-                        input_popup.send_keys(cod_antigo)
-                        time.sleep(1)
-                    except Exception:
-                        raise Exception("Não foi possível localizar o campo de texto no pop-up do filtro")
+                    # 3. Localiza e preenche qualquer campo de texto visível criado no pop-up
+                    input_popup = None
+                    inputs_encontrados = driver.find_elements(By.TAG_NAME, "input")
+                    
+                    for inp in inputs_encontrados:
+                        try:
+                            # Ignora inputs do cabeçalho superior e busca inputs visíveis
+                            if inp.is_displayed() and inp.get_attribute("type") in ["text", "search", None, ""]:
+                                parent_class = inp.find_element(By.XPATH, "./..").get_attribute("class") or ""
+                                if "header" not in parent_class.lower():
+                                    input_popup = inp
+                                    break
+                        except Exception:
+                            continue
 
-                    # 4. Clica no Botão Azul 'Confirmar'
+                    if not input_popup:
+                        # Busca direta por fallback
+                        input_popup = wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, "div[class*='popover'] input, div[class*='modal'] input, div[class*='filter'] input")))
+
+                    input_popup.clear()
+                    input_popup.send_keys(cod_antigo)
+                    time.sleep(1)
+
+                    # 4. Clica no botão azul 'Confirmar'
                     try:
                         btn_confirmar = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(.,'Confirmar')]")))
-                        driver.execute_script("arguments[0].click();", btn_confirmar)
-                        time.sleep(4)
+                        btn_confirmar.click()
                     except Exception:
                         driver.execute_script("""
                             let btns = Array.from(document.querySelectorAll('button'));
-                            let b = btns.find(x => x.innerText.includes('Confirmar'));
+                            let b = btns.find(x => x.innerText && x.innerText.includes('Confirmar'));
                             if (b) b.click();
                         """)
-                        time.sleep(4)
+                    time.sleep(4)
 
-                    # 5. Localiza a Linha do Produto Filtrado
+                    # 5. Localiza e valida a linha do produto
                     linhas = driver.find_elements(By.XPATH, f"//tr[contains(.,'{cod_antigo}')]")
                     if linhas:
-                        driver.execute_script("arguments[0].click();", linhas[0])
+                        linhas[0].click()
                         time.sleep(2.5)
 
                         try:
                             link_original = wait.until(EC.element_to_be_clickable((By.XPATH, "//*[contains(text(),'Link original')]")))
                             handles_antes = driver.window_handles
-                            driver.execute_script("arguments[0].click();", link_original)
-                            time.sleep(4)
+                            link_original.click()
+                            time.sleep(3.5)
                             handles_depois = driver.window_handles
 
                             if len(handles_depois) > len(handles_antes):

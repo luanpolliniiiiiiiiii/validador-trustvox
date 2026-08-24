@@ -7,6 +7,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException
 from webdriver_manager.chrome import ChromeDriverManager
 from webdriver_manager.core.os_manager import ChromeType
 
@@ -177,8 +178,8 @@ else:
         except Exception:
             driver = webdriver.Chrome(options=options)
 
-        driver.set_page_load_timeout(35)
-        wait = WebDriverWait(driver, 15)
+        driver.set_page_load_timeout(45)
+        wait = WebDriverWait(driver, 30)
 
         try:
             status_box.warning("🔑 Autenticando no Trustvox...")
@@ -210,7 +211,7 @@ else:
                 log_box.warning(f"Tentativa de envio de formulário: {str(login_err)}")
 
             driver.get(url_loja)
-            time.sleep(5)
+            time.sleep(6)
 
             url_pos = driver.current_url
             if "sign_in" in url_pos or "login" in url_pos:
@@ -235,23 +236,34 @@ else:
                 obs = ""
 
                 try:
-                    driver.get(url_loja)
+                    # Se não estiver na página de produtos, navega uma única vez
+                    if f"/{slug_empresa}/products" not in driver.current_url:
+                        driver.get(url_loja)
+                        time.sleep(4)
 
-                    # 1. Aguarda dinamicamente o botão "Filtrar" estar presente e clicável no DOM
+                    # Limpa filtros anteriores existentes antes de aplicar novo filtro
+                    driver.execute_script("""
+                        let cleanBtns = Array.from(document.querySelectorAll('button, a, span'));
+                        let cleanBtn = cleanBtns.find(x => x.innerText && x.innerText.trim().toLowerCase() === 'limpar');
+                        if (cleanBtn) cleanBtn.click();
+                    """)
+                    time.sleep(1)
+
+                    # 1. Aguarda dinamicamente o botão "Filtrar"
                     btn_filtrar = wait.until(EC.element_to_be_clickable((
                         By.XPATH, "//button[contains(normalize-space(),'Filtrar')] | //*[contains(text(),'Filtrar')]"
                     )))
                     driver.execute_script("arguments[0].click();", btn_filtrar)
                     time.sleep(1.5)
 
-                    # 2. Aguarda dinamicamente a opção "Código do Produto" no menu popover
+                    # 2. Aguarda dinamicamente a opção "Código do Produto"
                     opcao_codigo = wait.until(EC.element_to_be_clickable((
                         By.XPATH, "//*[contains(normalize-space(),'Código do Produto') or contains(text(),'Código do Produto')]"
                     )))
                     driver.execute_script("arguments[0].click();", opcao_codigo)
                     time.sleep(1.5)
 
-                    # 3. Preenche o código antigo no input do modal/popover
+                    # 3. Preenche o código no campo de input do popover
                     preencheu = driver.execute_script("""
                         let val = arguments[0];
                         let inputs = Array.from(document.querySelectorAll('input'));
@@ -268,18 +280,18 @@ else:
                     """, cod_antigo)
 
                     if not preencheu:
-                        raise Exception("Campo de texto para digitar o código não localizado no modal.")
+                        raise Exception("Campo de busca do código não localizado no popover.")
 
                     time.sleep(1)
 
-                    # 4. Aguarda dinamicamente e clica no botão azul "Confirmar"
+                    # 4. Aguarda e clica no botão azul "Confirmar"
                     btn_confirmar = wait.until(EC.element_to_be_clickable((
                         By.XPATH, "//button[contains(normalize-space(),'Confirmar')] | //*[contains(text(),'Confirmar')]"
                     )))
                     driver.execute_script("arguments[0].click();", btn_confirmar)
                     time.sleep(4)
 
-                    # 5. Clica na linha da tabela contendo o código
+                    # 5. Clica na linha da tabela correspondente ao produto
                     clicou_linha = driver.execute_script("""
                         let code = arguments[0];
                         let elements = Array.from(document.querySelectorAll('tbody tr, tr'));
@@ -344,6 +356,8 @@ else:
                     else:
                         obs = f"Produto {cod_antigo} não encontrado na tabela pós-filtro"
 
+                except TimeoutException:
+                    obs = "Tempo limite excedido (Timeout) ao aguardar renderização da página via Proxy"
                 except Exception as e:
                     erro_str = str(e).split("\n")[0].split("Stacktrace:")[0].strip()
                     obs = f"Falha na navegação: {erro_str}"

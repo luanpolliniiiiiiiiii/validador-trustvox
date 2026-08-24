@@ -1,7 +1,14 @@
 import os
+import time
 import pandas as pd
 import streamlit as st
-from playwright.sync_api import sync_playwright
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from webdriver_manager.chrome import ChromeDriverManager
+from webdriver_manager.core.os_manager import ChromeType
 
 # Configuração da página estilo NotebookLM Studio
 st.set_page_config(
@@ -11,7 +18,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Estilização CSS customizada
 st.markdown("""
 <style>
     .stApp { background-color: #0f1117; color: #e6e6e6; }
@@ -122,7 +128,6 @@ else:
         st.markdown("### 📝 Tabela ao Vivo")
         tabela_live = st.empty()
 
-    # --- LÓGICA DE AUTOMAÇÃO SÍNCRONA ---
     def rodar_validacao():
         col_antigo_name = col_antigo
         col_novo_name = col_novo
@@ -144,24 +149,44 @@ else:
 
         url_loja = f"https://app.trustvox.com.br/{slug_empresa}/products"
 
-        with sync_playwright() as p:
-            browser = p.chromium.launch(
-                headless=True,
-                args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--single-process"]
-            )
-            context = browser.new_context()
-            page = context.new_page()
+        # Configuração do Selenium para ambiente de Nuvem (Streamlit Cloud / Linux)
+        options = webdriver.ChromeOptions()
+        options.add_argument("--headless=new")
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--disable-gpu")
+        options.add_argument("--window-size=1920,1080")
 
+        try:
+            driver = webdriver.Chrome(
+                service=Service(ChromeDriverManager(chrome_type=ChromeType.CHROMIUM).install()),
+                options=options
+            )
+        except Exception:
+            driver = webdriver.Chrome(options=options)
+
+        wait = WebDriverWait(driver, 10)
+
+        try:
             # 1. LOGIN NO TRUSTVOX
             status_box.warning("🔑 Efetuando login no Trustvox...")
-            page.goto("https://app.trustvox.com.br/users/sign_in", wait_until="domcontentloaded")
-            page.wait_for_timeout(1000)
+            driver.get("https://app.trustvox.com.br/users/sign_in")
+            time.sleep(2)
 
-            if page.locator("input[type='email'], input[name*='email']").first.is_visible():
-                page.fill("input[type='email'], input[name*='email']", usuario_trustvox)
-                page.fill("input[type='password'], input[name*='password']", senha_trustvox)
-                page.click("button[type='submit'], input[type='submit']")
-                page.wait_for_timeout(3000)
+            try:
+                email_field = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "input[type='email'], input[name*='email']")))
+                email_field.clear()
+                email_field.send_keys(usuario_trustvox)
+
+                pass_field = driver.find_element(By.CSS_SELECTOR, "input[type='password'], input[name*='password']")
+                pass_field.clear()
+                pass_field.send_keys(senha_trustvox)
+
+                submit_btn = driver.find_element(By.CSS_SELECTOR, "button[type='submit'], input[type='submit']")
+                submit_btn.click()
+                time.sleep(3)
+            except Exception:
+                pass
 
             status_box.info(f"🚀 **Iniciando validação na loja {slug_empresa}...**")
 
@@ -183,44 +208,49 @@ else:
                 obs = ""
 
                 try:
-                    page.goto(url_loja, wait_until="domcontentloaded")
-                    page.wait_for_timeout(1000)
+                    driver.get(url_loja)
+                    time.sleep(2)
 
-                    btn_filtrar = page.locator("button:has-text('Filtrar')").first
-                    btn_filtrar.click(timeout=8000)
-                    page.wait_for_timeout(500)
+                    # Clica no botão Filtrar
+                    btn_filtrar = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(text(),'Filtrar')]")))
+                    btn_filtrar.click()
+                    time.sleep(1)
 
-                    opcao_codigo = page.locator("text=Código do Produto").first
-                    opcao_codigo.click(timeout=8000)
-                    page.wait_for_timeout(500)
+                    # Clica na opção Código do Produto
+                    opcao_codigo = wait.until(EC.element_to_be_clickable((By.XPATH, "//*[contains(text(),'Código do Produto')]")))
+                    opcao_codigo.click()
+                    time.sleep(1)
 
-                    input_popup = page.locator("div[class*='popover'] input, div[class*='modal'] input, div[class*='filter'] input").first
-                    if not input_popup.is_visible():
-                        input_popup = page.locator("input").filter(has_not=page.locator("header input")).last
+                    # Preenche o input do modal de filtro
+                    input_popup = wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, "div[class*='popover'] input, div[class*='modal'] input, div[class*='filter'] input")))
+                    input_popup.clear()
+                    input_popup.send_keys(cod_antigo)
+                    time.sleep(0.5)
 
-                    input_popup.click(timeout=5000)
-                    input_popup.fill(cod_antigo)
-                    page.wait_for_timeout(400)
+                    # Clica em Confirmar
+                    btn_confirmar = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(text(),'Confirmar')]")))
+                    btn_confirmar.click()
+                    time.sleep(3)
 
-                    btn_confirmar = page.locator("button:has-text('Confirmar')").first
-                    btn_confirmar.click(timeout=5000)
-                    page.wait_for_timeout(2500)
+                    # Localiza o produto retornado
+                    linhas = driver.find_elements(By.XPATH, f"//tr[contains(.,'{cod_antigo}')]")
+                    if linhas:
+                        linhas[0].click()
+                        time.sleep(2)
 
-                    linha_produto = page.locator(f"tr:has-text('{cod_antigo}'), tbody tr").first
-                    
-                    if linha_produto.is_visible():
-                        linha_produto.click(timeout=8000)
-                        page.wait_for_timeout(2000)
-
-                        with context.expect_page(timeout=12000) as new_page_info:
-                            page.click("text=Link original", timeout=8000)
+                        link_original = wait.until(EC.element_to_be_clickable((By.XPATH, "//*[contains(text(),'Link original')]")))
                         
-                        page_site = new_page_info.value
-                        page_site.wait_for_load_state("domcontentloaded")
-                        page_site.wait_for_timeout(2500)
+                        handles_antes = driver.window_handles
+                        link_original.click()
+                        time.sleep(3)
+                        handles_depois = driver.window_handles
 
-                        product_id_console = page_site.evaluate("""
-                            () => {
+                        # Alterna para a nova aba aberta do site oficial
+                        if len(handles_depois) > len(handles_antes):
+                            driver.switch_to.window(handles_depois[-1])
+                            time.sleep(3)
+
+                            product_id_console = driver.execute_script("""
                                 if (window._trustvox && Array.isArray(window._trustvox)) {
                                     for (let item of window._trustvox) {
                                         if (Array.isArray(item) && item[0] === '_productId') {
@@ -232,20 +262,22 @@ else:
                                     return String(window._trustvox._productId || window._trustvox.product_id || '');
                                 }
                                 return null;
-                            }
-                        """)
+                            """)
 
-                        html_site = page_site.content()
-                        page_site.close()
+                            html_site = driver.page_source
+                            driver.close()
+                            driver.switch_to.window(handles_antes[0])
 
-                        if product_id_console and product_id_console.strip() == cod_novo:
-                            status_val = "APROVADO"
-                            obs = f"_productId ({product_id_console}) verificado no site"
-                        elif cod_novo in html_site:
-                            status_val = "APROVADO"
-                            obs = "Código novo localizado no HTML da página"
+                            if product_id_console and product_id_console.strip() == cod_novo:
+                                status_val = "APROVADO"
+                                obs = f"_productId ({product_id_console}) verificado no site"
+                            elif cod_novo in html_site:
+                                status_val = "APROVADO"
+                                obs = "Código novo localizado no HTML da página"
+                            else:
+                                obs = f"Esperado: {cod_novo} | Retornado: {product_id_console}"
                         else:
-                            obs = f"Esperado: {cod_novo} | Retornado: {product_id_console}"
+                            obs = "Não foi possível abrir a página externa do produto"
                     else:
                         obs = f"Código {cod_antigo} não encontrado na busca"
 
@@ -268,8 +300,10 @@ else:
 
                 progress_bar.progress(cont / len(indices))
 
-            browser.close()
-            return df_input
+        finally:
+            driver.quit()
+
+        return df_input
 
     if btn_iniciar:
         with st.spinner("Conectando ao servidor e processando..."):

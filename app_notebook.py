@@ -1,10 +1,7 @@
-import asyncio
 import os
-import subprocess
-import sys
 import pandas as pd
 import streamlit as st
-from playwright.async_api import async_playwright
+from playwright.sync_api import sync_playwright
 
 # Configuração da página estilo NotebookLM Studio
 st.set_page_config(
@@ -125,8 +122,8 @@ else:
         st.markdown("### 📝 Tabela ao Vivo")
         tabela_live = st.empty()
 
-    # --- LÓGICA ASSÍNCRONA DE AUTOMAÇÃO ---
-    async def rodar_validacao():
+    # --- LÓGICA DE AUTOMAÇÃO SÍNCRONA ---
+    def rodar_validacao():
         col_antigo_name = col_antigo
         col_novo_name = col_novo
 
@@ -147,31 +144,24 @@ else:
 
         url_loja = f"https://app.trustvox.com.br/{slug_empresa}/products"
 
-        # Instala dependências do Chromium no servidor Linux se necessário
-        try:
-            subprocess.run([sys.executable, "-m", "playwright", "install", "chromium", "--with-deps"], check=False)
-        except Exception:
-            pass
-
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(
+        with sync_playwright() as p:
+            browser = p.chromium.launch(
                 headless=True,
-                args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
+                args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--single-process"]
             )
-            context = await browser.new_context()
-            page = await context.new_page()
+            context = browser.new_context()
+            page = context.new_page()
 
-            # 1. AUTENTICAÇÃO AUTOMÁTICA NO TRUSTVOX
+            # 1. LOGIN NO TRUSTVOX
             status_box.warning("🔑 Efetuando login no Trustvox...")
-            await page.goto("https://app.trustvox.com.br/users/sign_in", wait_until="domcontentloaded")
-            await page.wait_for_timeout(1000)
+            page.goto("https://app.trustvox.com.br/users/sign_in", wait_until="domcontentloaded")
+            page.wait_for_timeout(1000)
 
-            # Preenche e-mail e senha
-            if await page.locator("input[type='email'], input[name*='email']").first.is_visible():
-                await page.fill("input[type='email'], input[name*='email']", usuario_trustvox)
-                await page.fill("input[type='password'], input[name*='password']", senha_trustvox)
-                await page.click("button[type='submit'], input[type='submit']")
-                await page.wait_for_timeout(3000)
+            if page.locator("input[type='email'], input[name*='email']").first.is_visible():
+                page.fill("input[type='email'], input[name*='email']", usuario_trustvox)
+                page.fill("input[type='password'], input[name*='password']", senha_trustvox)
+                page.click("button[type='submit'], input[type='submit']")
+                page.wait_for_timeout(3000)
 
             status_box.info(f"🚀 **Iniciando validação na loja {slug_empresa}...**")
 
@@ -193,43 +183,43 @@ else:
                 obs = ""
 
                 try:
-                    await page.goto(url_loja, wait_until="domcontentloaded")
-                    await page.wait_for_timeout(1000)
+                    page.goto(url_loja, wait_until="domcontentloaded")
+                    page.wait_for_timeout(1000)
 
                     btn_filtrar = page.locator("button:has-text('Filtrar')").first
-                    await btn_filtrar.click(timeout=8000)
-                    await page.wait_for_timeout(500)
+                    btn_filtrar.click(timeout=8000)
+                    page.wait_for_timeout(500)
 
                     opcao_codigo = page.locator("text=Código do Produto").first
-                    await opcao_codigo.click(timeout=8000)
-                    await page.wait_for_timeout(500)
+                    opcao_codigo.click(timeout=8000)
+                    page.wait_for_timeout(500)
 
                     input_popup = page.locator("div[class*='popover'] input, div[class*='modal'] input, div[class*='filter'] input").first
-                    if not await input_popup.is_visible():
+                    if not input_popup.is_visible():
                         input_popup = page.locator("input").filter(has_not=page.locator("header input")).last
 
-                    await input_popup.click(timeout=5000)
-                    await input_popup.fill(cod_antigo)
-                    await page.wait_for_timeout(400)
+                    input_popup.click(timeout=5000)
+                    input_popup.fill(cod_antigo)
+                    page.wait_for_timeout(400)
 
                     btn_confirmar = page.locator("button:has-text('Confirmar')").first
-                    await btn_confirmar.click(timeout=5000)
-                    await page.wait_for_timeout(2500)
+                    btn_confirmar.click(timeout=5000)
+                    page.wait_for_timeout(2500)
 
                     linha_produto = page.locator(f"tr:has-text('{cod_antigo}'), tbody tr").first
                     
-                    if await linha_produto.is_visible():
-                        await linha_produto.click(timeout=8000)
-                        await page.wait_for_timeout(2000)
+                    if linha_produto.is_visible():
+                        linha_produto.click(timeout=8000)
+                        page.wait_for_timeout(2000)
 
-                        async with context.expect_page(timeout=12000) as new_page_info:
-                            await page.click("text=Link original", timeout=8000)
+                        with context.expect_page(timeout=12000) as new_page_info:
+                            page.click("text=Link original", timeout=8000)
                         
-                        page_site = await new_page_info.value
-                        await page_site.wait_for_load_state("domcontentloaded")
-                        await page_site.wait_for_timeout(2500)
+                        page_site = new_page_info.value
+                        page_site.wait_for_load_state("domcontentloaded")
+                        page_site.wait_for_timeout(2500)
 
-                        product_id_console = await page_site.evaluate("""
+                        product_id_console = page_site.evaluate("""
                             () => {
                                 if (window._trustvox && Array.isArray(window._trustvox)) {
                                     for (let item of window._trustvox) {
@@ -245,8 +235,8 @@ else:
                             }
                         """)
 
-                        html_site = await page_site.content()
-                        await page_site.close()
+                        html_site = page_site.content()
+                        page_site.close()
 
                         if product_id_console and product_id_console.strip() == cod_novo:
                             status_val = "APROVADO"
@@ -278,12 +268,12 @@ else:
 
                 progress_bar.progress(cont / len(indices))
 
-            await browser.close()
+            browser.close()
             return df_input
 
     if btn_iniciar:
         with st.spinner("Conectando ao servidor e processando..."):
-            df_final = asyncio.run(rodar_validacao())
+            df_final = rodar_validacao()
             status_box.success("🎉 Validação concluída com sucesso!")
 
             nome_saida = f"relatorio_{slug_empresa}_validado.xlsx"

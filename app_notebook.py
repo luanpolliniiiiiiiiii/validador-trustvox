@@ -140,32 +140,40 @@ else:
         wait = WebDriverWait(driver, 20)
 
         try:
-            # 1. LOGIN AUTOMÁTICO NO TRUSTVOX
+            # 1. LOGIN AUTOMÁTICO NA NOVA ROTA DO TRUSTVOX (/auth/login)
             status_box.warning("🔑 Efetuando login no Trustvox...")
-            driver.get("https://app.trustvox.com.br/users/sign_in")
+            driver.get("https://app.trustvox.com.br/auth/login")
             time.sleep(3)
 
             try:
-                email_field = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "input#user_email, input[type='email']")))
+                email_field = wait.until(EC.presence_of_element_located((
+                    By.CSS_SELECTOR, "input[type='email'], input#user_email, input[name='email'], input[name='user[email]']"
+                )))
                 email_field.clear()
                 email_field.send_keys(usuario_trustvox)
 
-                pass_field = driver.find_element(By.CSS_SELECTOR, "input#user_password, input[type='password']")
+                pass_field = driver.find_element(
+                    By.CSS_SELECTOR, "input[type='password'], input#user_password, input[name='password'], input[name='user[password]']"
+                )
                 pass_field.clear()
                 pass_field.send_keys(senha_trustvox)
 
-                submit_btn = driver.find_element(By.CSS_SELECTOR, "input[type='submit'], button[type='submit']")
+                submit_btn = driver.find_element(
+                    By.CSS_SELECTOR, "button[type='submit'], input[type='submit'], button:has-text('Entrar'), button:has-text('Login')"
+                )
                 driver.execute_script("arguments[0].click();", submit_btn)
-                time.sleep(5)
+                time.sleep(6)
             except Exception as login_err:
-                status_box.error(f"Erro no login: {str(login_err)}")
+                status_box.error(f"Erro no envio das credenciais: {str(login_err)}")
 
-            if "sign_in" in driver.current_url:
-                status_box.error("❌ Falha na autenticação do Trustvox! Verifique as credenciais.")
+            # Valida se o login realmente passou
+            url_pos_login = driver.current_url
+            if "login" in url_pos_login or "sign_in" in url_pos_login:
+                status_box.error("❌ Falha na autenticação do Trustvox! Verifique se o e-mail e a senha digitados estão corretos.")
                 driver.quit()
                 return df_input
 
-            status_box.info(f"🚀 **Login concluído! Analisando {len(indices)} produtos...**")
+            status_box.info(f"🚀 **Login concluído com sucesso! Analisando {len(indices)} produtos...**")
 
             for cont, idx in enumerate(indices, start=1):
                 val_raw = df_input.at[idx, col_antigo]
@@ -179,21 +187,22 @@ else:
                 obs = ""
 
                 try:
-                    # Carrega a página da loja e aguarda estabilização
                     driver.get(url_loja)
                     time.sleep(4)
 
-                    # Tenta clicar no botão 'Filtrar' com múltiplas tentativas e esperas
+                    # Verifica se foi deslogado no meio do processo
+                    if "login" in driver.current_url or "sign_in" in driver.current_url:
+                        raise Exception(f"Sessão expirada ou deslogada. URL: {driver.current_url}")
+
+                    # Passo 1: Clica no botão 'Filtrar'
                     btn_filtrar_encontrado = False
-                    for tentativa in range(3):
+                    for _ in range(3):
                         try:
-                            # Tenta via XPath nativo
                             btn_elem = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(.,'Filtrar') or contains(text(),'Filtrar')]")))
                             driver.execute_script("arguments[0].click();", btn_elem)
                             btn_filtrar_encontrado = True
                             break
                         except Exception:
-                            # Tenta via JS procurando qualquer botão da página
                             clicou = driver.execute_script("""
                                 let btns = Array.from(document.querySelectorAll('button'));
                                 let b = btns.find(x => x.innerText && x.innerText.toLowerCase().includes('filtrar'));
@@ -206,12 +215,11 @@ else:
                             time.sleep(2)
 
                     if not btn_filtrar_encontrado:
-                        url_atual = driver.current_url
-                        raise Exception(f"Botão 'Filtrar' não localizado. URL atual: {url_atual}")
+                        raise Exception(f"Botão 'Filtrar' não localizado. URL atual: {driver.current_url}")
                     
                     time.sleep(2)
 
-                    # Passo 2: Clica em 'Código do Produto'
+                    # Passo 2: Clica na opção 'Código do Produto'
                     try:
                         opcao_elem = wait.until(EC.element_to_be_clickable((By.XPATH, "//*[contains(text(),'Código do Produto')]")))
                         driver.execute_script("arguments[0].click();", opcao_elem)
@@ -227,7 +235,7 @@ else:
                     
                     time.sleep(2)
 
-                    # Passo 3: Preenche o código do produto no popover
+                    # Passo 3: Preenche o código no popover
                     preencheu = driver.execute_script("""
                         let val = arguments[0];
                         let inputs = Array.from(document.querySelectorAll('input'));
@@ -295,7 +303,7 @@ else:
                         time.sleep(4)
                         handles_depois = driver.window_handles
 
-                        # Passo 7: Validação do _productId na aba externa
+                        # Passo 7: Validação do _productId
                         if len(handles_depois) > len(handles_antes):
                             driver.switch_to.window(handles_depois[-1])
                             time.sleep(4)

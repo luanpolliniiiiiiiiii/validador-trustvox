@@ -74,6 +74,19 @@ else:
     else:
         df_input = pd.read_excel(arquivo_enviado)
 
+    # Trata colunas duplicadas na planilha de origem
+    cols_unicas = []
+    counts = {}
+    for col in df_input.columns:
+        col_str = str(col).strip()
+        if col_str in counts:
+            counts[col_str] += 1
+            cols_unicas.append(f"{col_str}_{counts[col_str]}")
+        else:
+            counts[col_str] = 0
+            cols_unicas.append(col_str)
+    df_input.columns = cols_unicas
+
     cols_lista = list(df_input.columns)
     col_antigo_default = next((c for c in cols_lista if any(k in str(c).lower() for k in ['cod_antigo', 'código antigo', 'codigo antigo', 'id antigo', 'id_antigo'])), cols_lista[0])
     col_novo_default = next((c for c in cols_lista if any(k in str(c).lower() for k in ['cod_novo', 'código novo', 'codigo novo', 'id novo', 'id_novo'])), cols_lista[1] if len(cols_lista) > 1 else cols_lista[0])
@@ -369,8 +382,12 @@ else:
         with st.spinner("Conectando ao servidor e processando..."):
             df_final = rodar_validacao()
             
-            # Garante que não haverá KeyError caso o fluxo seja interrompido
-            cols_exibicao = [c for c in ['Status Validação', col_antigo, col_novo, 'Observação Validação'] if c in df_final.columns]
+            # Garante colunas únicas e sem duplicidades para renderização no PyArrow
+            cols_desejadas = ['Status Validação', col_antigo, col_novo, 'Observação Validação']
+            cols_exibicao = []
+            for c in cols_desejadas:
+                if c in df_final.columns and c not in cols_exibicao:
+                    cols_exibicao.append(c)
 
             status_box.success("🎉 Processamento finalizado!")
 

@@ -44,7 +44,7 @@ with st.sidebar:
     proxy_server = st.text_input(
         "Servidor Proxy (IP:Porta ou user:pass@IP:Porta):",
         placeholder="ex: mxjcpfer:f080q5vj4ys9@198.23.243.226:6361",
-        help="Insira no formato usuario:senha@IP:Porta ou altere no Webshare para IP Authorization e use apenas IP:Porta"
+        help="Insira no formato usuario:senha@IP:Porta ou use o IP direto caso tenha ativado IP Authorization"
     ).strip()
 
     st.divider()
@@ -160,7 +160,6 @@ else:
         options.add_argument("--window-size=1920,1080")
         options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
 
-        # Trata a entrada do Proxy (com ou sem usuario:senha)
         if proxy_server:
             if "@" in proxy_server:
                 try:
@@ -178,7 +177,7 @@ else:
         except Exception:
             driver = webdriver.Chrome(options=options)
 
-        driver.set_page_load_timeout(30)
+        driver.set_page_load_timeout(35)
         wait = WebDriverWait(driver, 20)
 
         try:
@@ -211,13 +210,12 @@ else:
                 log_box.warning(f"Tentativa de envio de formulário: {str(login_err)}")
 
             driver.get(url_loja)
-            time.sleep(4)
+            time.sleep(5)
 
             url_pos = driver.current_url
             if "sign_in" in url_pos or "login" in url_pos:
                 status_box.error(f"❌ Sessão negada pelo servidor. URL retornado: {url_pos}")
                 log_box.error(f"O servidor redirecionou a conexão para: {url_pos}")
-                
                 df_input['Status Validação'] = 'REPROVADO'
                 df_input['Observação Validação'] = f'Bloqueio de IP/Sessão na nuvem ({url_pos})'
                 driver.quit()
@@ -238,40 +236,62 @@ else:
 
                 try:
                     driver.get(url_loja)
-                    time.sleep(3.5)
+                    time.sleep(4)
 
+                    # Busca avançada pelo botão/ação de Filtro
                     btn_filtrar_encontrado = False
-                    try:
-                        btn_elem = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(.,'Filtrar') or contains(text(),'Filtrar')]")))
-                        driver.execute_script("arguments[0].click();", btn_elem)
-                        btn_filtrar_encontrado = True
-                    except Exception:
+                    for _ in range(3):
                         clicou = driver.execute_script("""
-                            let btns = Array.from(document.querySelectorAll('button'));
-                            let b = btns.find(x => x.innerText && x.innerText.toLowerCase().includes('filtrar'));
-                            if (b) { b.click(); return true; }
+                            let elements = Array.from(document.querySelectorAll('button, a, div[role="button"], span'));
+                            let btn = elements.find(el => {
+                                let txt = (el.innerText || el.textContent || '').strip().toLowerCase();
+                                return txt === 'filtrar' || txt === 'filtro' || txt.includes('filtrar') || el.getAttribute('aria-label') === 'Filtrar';
+                            });
+                            if (btn) {
+                                btn.click();
+                                return true;
+                            }
                             return false;
                         """)
                         if clicou:
                             btn_filtrar_encontrado = True
+                            break
+                        time.sleep(2)
 
                     if not btn_filtrar_encontrado:
-                        raise Exception("Botão 'Filtrar' não localizado no painel.")
+                        # Tenta submeter o valor diretamente nos inputs visíveis de busca
+                        preencheu_direto = driver.execute_script("""
+                            let val = arguments[0];
+                            let inputs = Array.from(document.querySelectorAll('input[type="search"], input[placeholder*="Buscar"], input[placeholder*="Filtrar"], input[type="text"]'));
+                            let input = inputs.find(i => i.offsetParent !== null && !i.closest('header'));
+                            if (input) {
+                                let setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                                setter.call(input, val);
+                                input.dispatchEvent(new Event('input', { bubbles: true }));
+                                input.dispatchEvent(new Event('change', { bubbles: true }));
+                                input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
+                                return true;
+                            }
+                            return false;
+                        """, cod_antigo)
+                        if not preencheu_direto:
+                            raise Exception("Botão 'Filtrar' ou campo de busca não localizado na interface.")
 
-                    time.sleep(1.5)
+                    time.sleep(2)
 
+                    # Seleciona 'Código do Produto' se o menu abriu
                     driver.execute_script("""
-                        let els = Array.from(document.querySelectorAll('div, span, li, p, a'));
-                        let el = els.find(x => x.children.length === 0 && x.innerText && x.innerText.trim() === 'Código do Produto');
+                        let els = Array.from(document.querySelectorAll('div, span, li, p, a, button'));
+                        let el = els.find(x => x.children.length === 0 && x.innerText && x.innerText.trim().toLowerCase() === 'código do produto');
                         if (el) el.click();
                     """)
                     time.sleep(1.5)
 
+                    # Preenche no modal de filtro
                     preencheu = driver.execute_script("""
                         let val = arguments[0];
                         let inputs = Array.from(document.querySelectorAll('input'));
                         let input = inputs.find(i => !i.closest('header') && i.type !== 'hidden' && i.offsetParent !== null);
-                        if (!input) input = inputs.find(i => !i.closest('header') && i.type === 'text');
                         if (input) {
                             let setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
                             setter.call(input, val);
@@ -282,18 +302,17 @@ else:
                         return false;
                     """, cod_antigo)
 
-                    if not preencheu:
-                        raise Exception("Modal de filtro não abriu na interface.")
-
                     time.sleep(1)
 
+                    # Confirma o filtro
                     driver.execute_script("""
-                        let btns = Array.from(document.querySelectorAll('button'));
-                        let b = btns.find(x => x.innerText && x.innerText.trim() === 'Confirmar');
+                        let btns = Array.from(document.querySelectorAll('button, input[type="submit"]'));
+                        let b = btns.find(x => x.innerText && (x.innerText.trim().toLowerCase() === 'confirmar' || x.innerText.trim().toLowerCase() === 'buscar'));
                         if (b) b.click();
                     """)
                     time.sleep(4)
 
+                    # Clica na linha correspondente ao produto
                     clicou_linha = driver.execute_script("""
                         let code = arguments[0];
                         let elements = Array.from(document.querySelectorAll('tbody tr, tr, div[class*="table"] div'));
@@ -311,7 +330,7 @@ else:
                         handles_antes = driver.window_handles
                         clicou_link = driver.execute_script("""
                             let els = Array.from(document.querySelectorAll('a, button, span, div'));
-                            let link = els.find(x => x.innerText && x.innerText.trim().includes('Link original'));
+                            let link = els.find(x => x.innerText && x.innerText.trim().toLowerCase().includes('link original'));
                             if (link) { link.click(); return true; }
                             return false;
                         """)

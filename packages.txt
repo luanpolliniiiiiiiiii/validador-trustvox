@@ -9,3 +9,5 @@ libxcomposite1
 libxrandr2
 libxdamage1
 libpangocairo-1.0-0
+chromium
+chromium-driver

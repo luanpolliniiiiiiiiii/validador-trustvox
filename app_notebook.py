@@ -149,13 +149,13 @@ else:
 
         url_loja = f"https://app.trustvox.com.br/{slug_empresa}/products"
 
-        # Configuração do Selenium para ambiente de Nuvem (Streamlit Cloud / Linux)
         options = webdriver.ChromeOptions()
         options.add_argument("--headless=new")
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
         options.add_argument("--disable-gpu")
         options.add_argument("--window-size=1920,1080")
+        options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
         try:
             driver = webdriver.Chrome(
@@ -165,30 +165,37 @@ else:
         except Exception:
             driver = webdriver.Chrome(options=options)
 
-        wait = WebDriverWait(driver, 10)
+        wait = WebDriverWait(driver, 12)
 
         try:
-            # 1. LOGIN NO TRUSTVOX
+            # 1. AUTENTICAÇÃO NO TRUSTVOX
             status_box.warning("🔑 Efetuando login no Trustvox...")
             driver.get("https://app.trustvox.com.br/users/sign_in")
             time.sleep(2)
 
             try:
-                email_field = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "input[type='email'], input[name*='email']")))
+                # Seletores precisos para os campos de e-mail e senha do Trustvox
+                email_field = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "input#user_email, input[name='user[email]'], input[type='email']")))
                 email_field.clear()
                 email_field.send_keys(usuario_trustvox)
 
-                pass_field = driver.find_element(By.CSS_SELECTOR, "input[type='password'], input[name*='password']")
+                pass_field = driver.find_element(By.CSS_SELECTOR, "input#user_password, input[name='user[password]'], input[type='password']")
                 pass_field.clear()
                 pass_field.send_keys(senha_trustvox)
 
-                submit_btn = driver.find_element(By.CSS_SELECTOR, "button[type='submit'], input[type='submit']")
+                submit_btn = driver.find_element(By.CSS_SELECTOR, "input[type='submit'], button[type='submit']")
                 submit_btn.click()
-                time.sleep(3)
-            except Exception:
-                pass
+                time.sleep(4)
+            except Exception as login_err:
+                status_box.error(f"Erro na tentativa de login: {str(login_err)}")
 
-            status_box.info(f"🚀 **Iniciando validação na loja {slug_empresa}...**")
+            # Confirma se o login passou
+            if "sign_in" in driver.current_url:
+                status_box.error("❌ Falha na autenticação do Trustvox! Verifique o e-mail e senha informados.")
+                driver.quit()
+                return df_input
+
+            status_box.info(f"🚀 **Login concluído! Iniciando validação na loja {slug_empresa}...**")
 
             for cont, idx in enumerate(indices, start=1):
                 val_raw = df_input.at[idx, col_antigo_name]
@@ -209,30 +216,30 @@ else:
 
                 try:
                     driver.get(url_loja)
-                    time.sleep(2)
+                    time.sleep(2.5)
 
-                    # Clica no botão Filtrar
-                    btn_filtrar = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(text(),'Filtrar')]")))
+                    # Botão 'Filtrar'
+                    btn_filtrar = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(.,'Filtrar')]")))
                     btn_filtrar.click()
                     time.sleep(1)
 
-                    # Clica na opção Código do Produto
+                    # Opção 'Código do Produto'
                     opcao_codigo = wait.until(EC.element_to_be_clickable((By.XPATH, "//*[contains(text(),'Código do Produto')]")))
                     opcao_codigo.click()
                     time.sleep(1)
 
-                    # Preenche o input do modal de filtro
-                    input_popup = wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, "div[class*='popover'] input, div[class*='modal'] input, div[class*='filter'] input")))
+                    # Campo de texto do Modal do filtro
+                    input_popup = wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, "div[class*='popover'] input, div[class*='modal'] input, div[class*='filter'] input, input[type='text']")))
                     input_popup.clear()
                     input_popup.send_keys(cod_antigo)
                     time.sleep(0.5)
 
-                    # Clica em Confirmar
-                    btn_confirmar = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(text(),'Confirmar')]")))
+                    # Botão 'Confirmar'
+                    btn_confirmar = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(.,'Confirmar')]")))
                     btn_confirmar.click()
                     time.sleep(3)
 
-                    # Localiza o produto retornado
+                    # Tabela de resultados
                     linhas = driver.find_elements(By.XPATH, f"//tr[contains(.,'{cod_antigo}')]")
                     if linhas:
                         linhas[0].click()
@@ -245,7 +252,6 @@ else:
                         time.sleep(3)
                         handles_depois = driver.window_handles
 
-                        # Alterna para a nova aba aberta do site oficial
                         if len(handles_depois) > len(handles_antes):
                             driver.switch_to.window(handles_depois[-1])
                             time.sleep(3)
@@ -282,7 +288,9 @@ else:
                         obs = f"Código {cod_antigo} não encontrado na busca"
 
                 except Exception as e:
-                    obs = f"Falha na navegação: {str(e)}"
+                    # Captura mensagem de erro amigável em vez da stacktrace bruta do Selenium
+                    msg_erro = str(e).split('\n')[0]
+                    obs = f"Erro na navegação: {msg_erro}"
 
                 if status_val == "APROVADO":
                     aprovados_count += 1

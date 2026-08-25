@@ -1,6 +1,9 @@
+import os
+import sys
+import time
 import pandas as pd
-import requests
 import streamlit as st
+from playwright.sync_api import sync_playwright
 
 st.set_page_config(
     page_title="Trustvox Studio | Online Migration",
@@ -52,7 +55,7 @@ with st.sidebar:
         index=0
     )
 
-st.title("🛡️ Trustvox Migration Studio — Execução Online")
+st.title("🛡️ Trustvox Migration Studio — Execução Online Real")
 
 if arquivo_enviado is None or not slug_empresa:
     st.info("👈 Informe suas credenciais, slug e suba a planilha na barra lateral para iniciar.")
@@ -106,74 +109,7 @@ else:
         st.divider()
         tabela_live = st.empty()
 
-    def realizar_login_autenticado(session):
-        url_login_page = "https://app.trustvox.com.br/auth/login"
-        
-        # Passo 1: Obter cookies iniciais de navegação
-        try:
-            res_page = session.get(url_login_page, timeout=15)
-        except Exception as e:
-            return False, f"Erro ao acessar página de login: {str(e)}"
-
-        # Passo 2: Tentar login via JSON API e Form Payload
-        endpoints_login = [
-            ("https://app.trustvox.com.br/api/auth/login", "json"),
-            ("https://app.trustvox.com.br/auth/login", "json"),
-            ("https://app.trustvox.com.br/auth/login", "data")
-        ]
-
-        payload = {
-            "email": email_trustvox,
-            "password": senha_trustvox,
-            "user": {
-                "email": email_trustvox,
-                "password": senha_trustvox
-            }
-        }
-
-        login_efetuado = False
-        detalhe_erro = ""
-
-        for endpoint, tipo in endpoints_login:
-            try:
-                if tipo == "json":
-                    res = session.post(
-                        endpoint, 
-                        json={"email": email_trustvox, "password": senha_trustvox},
-                        headers={"X-Requested-With": "XMLHttpRequest", "Accept": "application/json"},
-                        timeout=15
-                    )
-                else:
-                    res = session.post(
-                        endpoint, 
-                        data={"email": email_trustvox, "password": senha_trustvox},
-                        timeout=15
-                    )
-
-                # Verifica se gerou cookies de sessão ou se redirecionou para fora da página de login
-                cookies_sessao = session.cookies.get_dict()
-                if res.status_code in [200, 302] and not ("login" in res.url and res.status_code == 200 and "password" in res.text):
-                    login_efetuado = True
-                    break
-                elif len(cookies_sessao) > 1:
-                    login_efetuado = True
-                    break
-            except Exception as err:
-                detalhe_erro = str(err)
-
-        if not login_efetuado:
-            return False, "Credenciais inválidas ou resposta não reconhecida da API de login."
-
-        # Passo 3: Estabelecer contexto na empresa selecionada
-        url_empresa = f"https://app.trustvox.com.br/{slug_empresa}"
-        try:
-            session.get(url_empresa, timeout=15)
-        except Exception:
-            pass
-
-        return True, "Autenticado com sucesso!"
-
-    def rodar_validacao_api():
+    def rodar_validacao_real():
         col_antigo_name = col_antigo
         col_novo_name = col_novo
 
@@ -195,119 +131,197 @@ else:
         aprovados_count = 0
         reprovados_count = 0
 
-        session = requests.Session()
-        session.headers.update({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-            "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7"
-        })
+        url_login = "https://app.trustvox.com.br/auth/login"
+        url_products = f"https://app.trustvox.com.br/{slug_empresa}/products"
 
-        if usar_proxy and proxy_ip_porta:
-            proxy_url = f"http://{proxy_user.strip()}:{proxy_pass.strip()}@{proxy_ip_porta.strip()}"
-            session.proxies = {"http": proxy_url, "https": proxy_url}
+        with sync_playwright() as p:
+            status_box.info("🌐 Abrindo navegador Chromium com suporte a JavaScript...")
 
-        status_box.info("🔑 Estabelecendo sessão de login e obtendo tokens na Trustvox...")
+            launch_options = {
+                "headless": True,
+                "args": [
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu",
+                    "--single-process"
+                ]
+            }
 
-        sucesso_login, msg_login = realizar_login_autenticado(session)
+            browser = p.chromium.launch(**launch_options)
 
-        if not sucesso_login:
-            status_box.error(f"❌ Falha no login: {msg_login}")
-            return df_input
+            context_args = {
+                "viewport": {"width": 1920, "height": 1080},
+                "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            }
 
-        status_box.success(f"🎉 Login confirmado! Iniciando validação na empresa '{slug_empresa}'...")
+            if usar_proxy and proxy_ip_porta:
+                context_args["proxy"] = {
+                    "server": f"http://{proxy_ip_porta.strip()}",
+                    "username": proxy_user.strip(),
+                    "password": proxy_pass.strip()
+                }
 
-        url_products_page = f"https://app.trustvox.com.br/{slug_empresa}/products"
-        url_api_search = f"https://app.trustvox.com.br/api/stores/{slug_empresa}/products"
+            context = browser.new_context(**context_args)
+            page = context.new_page()
 
-        for cont, idx in enumerate(indices, start=1):
-            val_raw = df_input.at[idx, col_antigo_name]
-            cod_antigo = str(int(val_raw)).strip() if pd.notna(val_raw) and isinstance(val_raw, (int, float)) else str(val_raw).strip()
-
-            val_novo_raw = df_input.at[idx, col_novo_name]
-            cod_novo = str(int(val_novo_raw)).strip() if pd.notna(val_novo_raw) and isinstance(val_novo_raw, (int, float)) else str(val_novo_raw).strip()
-
-            linha_excel = idx + 2
-            status_val = "REPROVADO"
-            obs = ""
-
+            # -------------------------------------------------------------
+            # ETAPA DE LOGIN REAL (Conforme gravado no vídeo)
+            # -------------------------------------------------------------
             try:
-                encontrado = False
-                p_url = None
+                status_box.info(f"🔑 Carregando página de login e digitando {email_trustvox}...")
+                page.goto(url_login, wait_until="networkidle", timeout=45000)
+                page.wait_for_timeout(2000)
 
-                # 1. Consulta via Endpoint da API interna de produtos
-                res_api = session.get(
-                    url_api_search, 
-                    params={"code": cod_antigo, "query": cod_antigo, "search": cod_antigo}, 
-                    headers={"Accept": "application/json"},
-                    timeout=12
-                )
+                # Preenche E-mail e Senha
+                page.locator("input[name='email']").fill(email_trustvox)
+                page.wait_for_timeout(500)
+                page.locator("input[name='password']").fill(senha_trustvox)
+                page.wait_for_timeout(500)
+
+                status_box.info("🔑 Clicando em 'Entrar' e aguardando autenticação da sessão...")
+                page.click("button[type='submit']")
                 
-                if res_api.status_code == 200:
-                    try:
-                        data = res_api.json()
-                        items = data.get("items", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
-                        for item in items:
-                            code_item = str(item.get("code", "") or item.get("product_id", "")).strip()
-                            if code_item == cod_antigo:
-                                encontrado = True
-                                p_url = item.get("url") or item.get("links", {}).get("original")
-                                break
-                    except Exception:
-                        pass
+                # Aguarda transição do login
+                page.wait_for_timeout(6000)
 
-                # 2. Caso a API de busca não retorne JSON, verifica pela resposta autenticada do catálogo
-                if not encontrado:
-                    res_html = session.get(f"{url_products_page}?search={cod_antigo}", timeout=12)
-                    if res_html.status_code == 200 and cod_antigo in res_html.text:
-                        encontrado = True
+                # Transição de seleção de empresa se houver (Vídeo 0:16 - 0:21)
+                if "company-selection" in page.url or "company_selection" in page.url or page.locator("input[placeholder*='empresa']").is_visible():
+                    status_box.info(f"🏢 Selecionando a empresa '{slug_empresa}'...")
+                    inp_company = page.locator("input[placeholder*='empresa'], input[type='text']").first
+                    inp_company.fill(slug_empresa)
+                    page.wait_for_timeout(1500)
 
-                # 3. Validação do código no e-commerce se houver URL do produto
-                if encontrado:
-                    if p_url:
-                        try:
-                            res_site = requests.get(p_url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
-                            if cod_novo in res_site.text or f"'{cod_novo}'" in res_site.text or f'"{cod_novo}"' in res_site.text:
-                                status_val = "APROVADO"
-                                obs = f"_productId ({cod_novo}) verificado na página do e-commerce"
-                            else:
-                                status_val = "APROVADO"
-                                obs = f"Código {cod_antigo} localizado no Trustvox"
-                        except Exception:
+                    opcao_empresa = page.locator(f"text={slug_empresa}").first
+                    opcao_empresa.click()
+                    page.wait_for_timeout(4000)
+
+                status_box.info(f"🚀 Sessão autenticada! Acessando {url_products}...")
+                page.goto(url_products, wait_until="networkidle", timeout=30000)
+                page.wait_for_timeout(2000)
+
+            except Exception as login_err:
+                status_box.error(f"❌ Erro durante a navegação de login: {login_err}")
+                browser.close()
+                return df_input
+
+            # -------------------------------------------------------------
+            # LOOP DE VALIDAÇÃO DOS PRODUTOS
+            # -------------------------------------------------------------
+            for cont, idx in enumerate(indices, start=1):
+                val_raw = df_input.at[idx, col_antigo_name]
+                cod_antigo = str(int(val_raw)).strip() if pd.notna(val_raw) and isinstance(val_raw, (int, float)) else str(val_raw).strip()
+
+                val_novo_raw = df_input.at[idx, col_novo_name]
+                cod_novo = str(int(val_novo_raw)).strip() if pd.notna(val_novo_raw) and isinstance(val_novo_raw, (int, float)) else str(val_novo_raw).strip()
+
+                linha_excel = idx + 2
+                status_val = "REPROVADO"
+                obs = ""
+
+                try:
+                    if page.url != url_products:
+                        page.goto(url_products, wait_until="domcontentloaded")
+                        page.wait_for_timeout(1500)
+
+                    # 1. Clicar em Filtrar (Vídeo 0:31)
+                    btn_filtrar = page.locator("button:has-text('Filtrar')").first
+                    btn_filtrar.click(timeout=8000)
+                    page.wait_for_timeout(800)
+
+                    # 2. Clicar em Código do Produto (Vídeo 0:33)
+                    opcao_codigo = page.locator("text=Código do Produto").first
+                    opcao_codigo.click(timeout=8000)
+                    page.wait_for_timeout(800)
+
+                    # 3. Digitar código na caixa flutuante (Vídeo 0:34 - 0:37)
+                    input_popup = page.locator("div[class*='popover'] input, div[class*='modal'] input, div[class*='filter'] input").first
+                    if not input_popup.is_visible():
+                        input_popup = page.locator("input").filter(has_not=page.locator("header input")).last
+
+                    input_popup.click(timeout=5000)
+                    input_popup.fill(cod_antigo)
+                    page.wait_for_timeout(600)
+
+                    # 4. Clicar em Confirmar (Vídeo 0:38)
+                    btn_confirmar = page.locator("button:has-text('Confirmar')").first
+                    btn_confirmar.click(timeout=5000)
+                    page.wait_for_timeout(2500)
+
+                    # 5. Clicar no produto da tabela (Vídeo 0:41 - 0:43)
+                    linha_produto = page.locator(f"tr:has-text('{cod_antigo}'), tbody tr").first
+
+                    if linha_produto.is_visible():
+                        linha_produto.click(timeout=8000)
+                        page.wait_for_timeout(2000)
+
+                        # 6. Clicar no botão 'Link original' (Vídeo 0:46)
+                        with context.expect_page(timeout=12000) as new_page_info:
+                            page.click("text=Link original", timeout=8000)
+                        
+                        page_site = new_page_info.value
+                        page_site.wait_for_load_state("domcontentloaded")
+                        page_site.wait_for_timeout(2500)
+
+                        # 7. Ler _productId no console JS (Vídeo 0:53 - 1:05)
+                        product_id_console = page_site.evaluate("""
+                            () => {
+                                if (window._trustvox && Array.isArray(window._trustvox)) {
+                                    for (let item of window._trustvox) {
+                                        if (Array.isArray(item) && item[0] === '_productId') {
+                                            return String(item[1]);
+                                        }
+                                    }
+                                }
+                                if (window._trustvox && typeof window._trustvox === 'object') {
+                                    return String(window._trustvox._productId || window._trustvox.product_id || '');
+                                }
+                                return null;
+                            }
+                        """)
+
+                        html_site = page_site.content()
+                        page_site.close()
+
+                        if product_id_console and str(product_id_console).strip() == cod_novo:
                             status_val = "APROVADO"
-                            obs = f"Código {cod_antigo} localizado no catálogo do Trustvox"
+                            obs = f"_productId ({product_id_console}) verificado no site"
+                        elif cod_novo in html_site:
+                            status_val = "APROVADO"
+                            obs = "Código novo localizado no HTML da página"
+                        else:
+                            obs = f"Esperado: {cod_novo} | Retornado: {product_id_console}"
                     else:
-                        status_val = "APROVADO"
-                        obs = f"Código {cod_antigo} localizado no catálogo do Trustvox"
+                        obs = f"Código {cod_antigo} não encontrado na busca"
+
+                except Exception as e:
+                    obs = f"Falha no filtro/navegação: {str(e).splitlines()[0]}"
+
+                if status_val == "APROVADO":
+                    aprovados_count += 1
+                    log_box.success(f"Linha {linha_excel} | ID {cod_antigo} ➔ {cod_novo} | ✅ APROVADO")
                 else:
-                    obs = f"Código {cod_antigo} não encontrado na busca"
+                    reprovados_count += 1
+                    log_box.error(f"Linha {linha_excel} | ID {cod_antigo} ➔ {cod_novo} | ❌ REPROVADO ({obs})")
 
-            except Exception as e:
-                obs = f"Falha na requisição: {str(e).splitlines()[0]}"
+                df_input.at[idx, col_status_nome] = status_val
+                df_input.at[idx, col_obs_nome] = obs
 
-            if status_val == "APROVADO":
-                aprovados_count += 1
-                log_box.success(f"Linha {linha_excel} | ID {cod_antigo} ➔ {cod_novo} | ✅ APROVADO")
-            else:
-                reprovados_count += 1
-                log_box.error(f"Linha {linha_excel} | ID {cod_antigo} ➔ {cod_novo} | ❌ REPROVADO ({obs})")
+                kpi_total.metric("Analisados", f"{cont}/{len(indices)}")
+                kpi_ok.metric("Aprovados", f"{aprovados_count}")
+                kpi_err.metric("Reprovados", f"{reprovados_count}")
 
-            df_input.at[idx, col_status_nome] = status_val
-            df_input.at[idx, col_obs_nome] = obs
+                progress_bar.progress(cont / len(indices))
 
-            kpi_total.metric("Analisados", f"{cont}/{len(indices)}")
-            kpi_ok.metric("Aprovados", f"{aprovados_count}")
-            kpi_err.metric("Reprovados", f"{reprovados_count}")
-
-            progress_bar.progress(cont / len(indices))
-
-        return df_input
+            browser.close()
+            return df_input
 
     if btn_iniciar:
         if not senha_trustvox:
             st.warning("Preencha sua Senha do Trustvox na barra lateral.")
         else:
-            with st.spinner("Iniciando validação no servidor..."):
-                df_final = rodar_validacao_api()
+            with st.spinner("Iniciando login e navegação real no navegador..."):
+                df_final = rodar_validacao_real()
 
                 status_box.success("🎉 Validação concluída com sucesso!")
 

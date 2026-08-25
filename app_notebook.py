@@ -154,16 +154,16 @@ else:
         aprovados_count = 0
         reprovados_count = 0
 
-        url_login = f"https://app.trustvox.com.br/empresas/{slug_empresa}/produtos"
-        url_loja = f"https://app.trustvox.com.br/{slug_empresa}/products"
+        # URL corrigida para a aba em português da Trustvox
+        url_loja = f"https://app.trustvox.com.br/empresas/{slug_empresa}/produtos"
 
         status_box.info("🌐 Inicializando navegador Chromium...")
         driver = criar_driver_online()
-        wait = WebDriverWait(driver, 10)
+        wait = WebDriverWait(driver, 12)
 
         try:
             status_box.info("🔑 Realizando autenticação na Trustvox...")
-            driver.get(url_login)
+            driver.get(url_loja)
             time.sleep(3)
 
             if "login" in driver.current_url or len(driver.find_elements(By.NAME, "email")) > 0:
@@ -207,76 +207,73 @@ else:
                 driver.get(url_loja)
                 time.sleep(1.5)
 
-                try:
-                    btn_filtrar = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'Filtrar')]")))
-                    driver.execute_script("arguments[0].click();", btn_filtrar)
-                    time.sleep(0.5)
+                # 1. Clicar no botão 'Filtrar'
+                btn_filtrar = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'Filtrar')]")))
+                driver.execute_script("arguments[0].click();", btn_filtrar)
+                time.sleep(0.6)
 
-                    opcao_codigo = wait.until(EC.element_to_be_clickable((By.XPATH, "//*[contains(text(), 'Código do Produto')]")))
-                    driver.execute_script("arguments[0].click();", opcao_codigo)
-                    time.sleep(0.5)
+                # 2. Clicar em 'Código do Produto'
+                opcao_codigo = wait.until(EC.element_to_be_clickable((By.XPATH, "//*[contains(text(), 'Código do Produto')]")))
+                driver.execute_script("arguments[0].click();", opcao_codigo)
+                time.sleep(0.6)
 
-                    inputs = driver.find_elements(By.CSS_SELECTOR, "div[class*='popover'] input, div[class*='modal'] input, div[class*='filter'] input")
-                    input_popup = inputs[0] if len(inputs) > 0 else driver.find_elements(By.TAG_NAME, "input")[-1]
-                    input_popup.click()
-                    input_popup.clear()
-                    input_popup.send_keys(cod_antigo)
-                    time.sleep(0.4)
+                # 3. Preencher caixa de texto do popup com o código antigo
+                campo_input = wait.until(EC.presence_of_element_located((By.XPATH, "//div[contains(@class, 'popover') or contains(@class, 'modal') or contains(@class, 'filter')]//input | //input[not(@type='hidden')]")))
+                campo_input.click()
+                campo_input.clear()
+                campo_input.send_keys(cod_antigo)
+                time.sleep(0.4)
 
-                    btn_confirmar = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'Confirmar')]")))
-                    driver.execute_script("arguments[0].click();", btn_confirmar)
-                    time.sleep(2)
-                except Exception:
-                    driver.get(f"{url_loja}?search={cod_antigo}")
-                    time.sleep(2)
+                # 4. Clicar em 'Confirmar'
+                btn_confirmar = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'Confirmar')]")))
+                driver.execute_script("arguments[0].click();", btn_confirmar)
+                time.sleep(2.5)
 
-                linhas_tabela = driver.find_elements(By.XPATH, f"//tr[contains(., '{cod_antigo}')] | //tbody/tr")
+                # 5. Clicar na linha do produto na tabela
+                linha_prod = driver.find_elements(By.XPATH, f"//tr[contains(., '{cod_antigo}')] | //tbody/tr")
                 
-                if len(linhas_tabela) > 0:
-                    driver.execute_script("arguments[0].click();", linhas_tabela[0])
-                    time.sleep(1.5)
+                if len(linha_prod) > 0:
+                    driver.execute_script("arguments[0].click();", linha_prod[0])
+                    time.sleep(2)
 
+                    # 6. Clicar em 'Link original' e verificar janela aberta
                     janela_original = driver.current_window_handle
-                    btn_links = driver.find_elements(By.XPATH, "//*[contains(text(), 'Link original')]")
-                    
-                    if len(btn_links) > 0:
-                        driver.execute_script("arguments[0].click();", btn_links[0])
-                        time.sleep(2.5)
+                    btn_link = wait.until(EC.element_to_be_clickable((By.XPATH, "//*[contains(text(), 'Link original')]")))
+                    driver.execute_script("arguments[0].click();", btn_link)
+                    time.sleep(2.5)
 
-                        novas_janelas = [j for j in driver.window_handles if j != janela_original]
-                        if len(novas_janelas) > 0:
-                            driver.switch_to.window(novas_janelas[0])
+                    novas_janelas = [j for j in driver.window_handles if j != janela_original]
+                    if len(novas_janelas) > 0:
+                        driver.switch_to.window(novas_janelas[0])
 
-                        product_id_console = driver.execute_script("""
-                            if (window._trustvox && Array.isArray(window._trustvox)) {
-                                for (let item of window._trustvox) {
-                                    if (Array.isArray(item) && item[0] === '_productId') {
-                                        return String(item[1]);
-                                    }
+                    product_id_console = driver.execute_script("""
+                        if (window._trustvox && Array.isArray(window._trustvox)) {
+                            for (let item of window._trustvox) {
+                                if (Array.isArray(item) && item[0] === '_productId') {
+                                    return String(item[1]);
                                 }
                             }
-                            if (window._trustvox && typeof window._trustvox === 'object') {
-                                return String(window._trustvox._productId || window._trustvox.product_id || '');
-                            }
-                            return null;
-                        """)
+                        }
+                        if (window._trustvox && typeof window._trustvox === 'object') {
+                            return String(window._trustvox._productId || window._trustvox.product_id || '');
+                        }
+                        return null;
+                    """)
 
-                        html_site = driver.page_source
+                    html_site = driver.page_source
 
-                        if len(novas_janelas) > 0:
-                            driver.close()
-                            driver.switch_to.window(janela_original)
+                    if len(novas_janelas) > 0:
+                        driver.close()
+                        driver.switch_to.window(janela_original)
 
-                        if product_id_console and str(product_id_console).strip() == cod_novo:
-                            status_val = "APROVADO"
-                            obs = f"_productId ({product_id_console}) verificado no site"
-                        elif cod_novo in html_site:
-                            status_val = "APROVADO"
-                            obs = "Código novo localizado no HTML da página"
-                        else:
-                            obs = f"Esperado: {cod_novo} | Retornado: {product_id_console}"
+                    if product_id_console and str(product_id_console).strip() == cod_novo:
+                        status_val = "APROVADO"
+                        obs = f"_productId ({product_id_console}) verificado no site"
+                    elif cod_novo in html_site:
+                        status_val = "APROVADO"
+                        obs = "Código novo localizado no HTML da página"
                     else:
-                        obs = f"Produto localizado no Trustvox, mas sem botão 'Link original'"
+                        obs = f"Esperado: {cod_novo} | Retornado: {product_id_console}"
                 else:
                     obs = f"Código {cod_antigo} não encontrado na busca"
 

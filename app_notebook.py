@@ -23,10 +23,14 @@ with st.sidebar:
     arquivo_enviado = st.file_uploader("Carregar Planilha De/Para", type=["xlsx", "csv"])
 
 if arquivo_enviado and slug_empresa:
-    if arquivo_enviado.name.endswith('.csv'):
-        df_input = pd.read_csv(arquivo_enviado)
-    else:
-        df_input = pd.read_excel(arquivo_enviado)
+    try:
+        if arquivo_enviado.name.endswith('.csv'):
+            df_input = pd.read_csv(arquivo_enviado)
+        else:
+            df_input = pd.read_excel(arquivo_enviado)
+    except Exception as e:
+        st.error(f"Erro ao ler arquivo: {e}")
+        st.stop()
 
     cols_lista = list(df_input.columns)
     col_antigo_default = next((c for c in cols_lista if any(k in str(c).lower() for k in ['cod', 'código', 'codigo', 'id_antigo'])), cols_lista[0])
@@ -44,7 +48,7 @@ if arquivo_enviado and slug_empresa:
     progress_bar = st.progress(0)
     log_box = st.container(height=300)
 
-    def rodar_validacao_http():
+    def rodar_validacao():
         df_input['Status Validação'] = 'Não Testado'
         df_input['Observação'] = '-'
 
@@ -64,12 +68,10 @@ if arquivo_enviado and slug_empresa:
                 "https": proxy_url
             }
 
-        status_box.info("🌐 Conectando e autenticando via HTTP Session...")
+        status_box.info("🌐 Conectando e autenticando...")
 
-        # 1. Autenticação na Trustvox
         login_url = "https://app.trustvox.com.br/auth/login"
         try:
-            res_page = session.get(login_url, timeout=20)
             payload = {
                 "email": email_trustvox,
                 "password": senha_trustvox
@@ -77,15 +79,14 @@ if arquivo_enviado and slug_empresa:
             res_login = session.post(login_url, data=payload, timeout=20)
             
             if res_login.status_code != 200 and "login" in res_login.url:
-                status_box.error("❌ Falha na autenticação HTTP. Verifique credenciais ou o Proxy.")
+                status_box.error("❌ Falha na autenticação. Verifique credenciais ou o Proxy.")
                 return df_input
             
-            status_box.success("🎉 Autenticado com sucesso via sessão leve!")
+            status_box.success("🎉 Autenticado com sucesso!")
         except Exception as e:
             status_box.error(f"Erro de conexão no login: {e}")
             return df_input
 
-        # 2. Varredura da Planilha
         url_busca_base = f"https://app.trustvox.com.br/{slug_empresa}/products"
 
         for idx in range(total_rows):
@@ -127,8 +128,8 @@ if arquivo_enviado and slug_empresa:
         if not email_trustvox or not senha_trustvox:
             st.warning("Preencha seu E-mail e Senha na barra lateral.")
         else:
-            with st.spinner("Executando validação via sessão leve HTTP..."):
-                df_final = rodar_validacao_http()
+            with st.spinner("Executando validação..."):
+                df_final = rodar_validacao()
 
             status_box.success("🎉 Validação concluída!")
             nome_saida = f"relatorio_{slug_empresa}_online.xlsx"

@@ -1,16 +1,17 @@
 import os
+import sys
 import time
+import subprocess
 import pandas as pd
 import streamlit as st
 
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.common.by import By
-from selenium.webdriver.common.keys import Keys
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from webdriver_manager.chrome import ChromeDriverManager
+# Garante a instalação do Playwright e seus binários no ambiente da nuvem
+try:
+    from playwright.sync_api import sync_playwright
+except ImportError:
+    subprocess.run([sys.executable, "-m", "pip", "install", "playwright"])
+    subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"])
+    from playwright.sync_api import sync_playwright
 
 st.set_page_config(
     page_title="Trustvox Studio | Online Migration",
@@ -42,6 +43,13 @@ with st.sidebar:
         "Slug da Empresa no Trustvox:",
         value="coty"
     ).strip().lower()
+
+    st.divider()
+    st.subheader("🌐 Configuração de Proxy")
+    usar_proxy = st.checkbox("Ativar Proxy de Saída", value=True)
+    proxy_ip_porta = st.text_input("IP:Porta do Proxy:", value="31.59.20.176:6754")
+    proxy_user = st.text_input("Usuário do Proxy:", value="mxjcpfer")
+    proxy_pass = st.text_input("Senha do Proxy:", type="password", value="f080q5vj4ys9")
 
     st.divider()
     arquivo_enviado = st.file_uploader(
@@ -109,29 +117,7 @@ else:
         st.divider()
         tabela_live = st.empty()
 
-    def criar_driver_direto():
-        chrome_options = Options()
-        chrome_options.add_argument("--headless=new")
-        chrome_options.add_argument("--no-sandbox")
-        chrome_options.add_argument("--disable-dev-shm-usage")
-        chrome_options.add_argument("--disable-gpu")
-        chrome_options.add_argument("--window-size=1920,1080")
-        chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-
-        for path in ["/usr/bin/chromium", "/usr/bin/chromium-browser", "/usr/bin/google-chrome"]:
-            if os.path.exists(path):
-                chrome_options.binary_location = path
-                break
-
-        try:
-            service = Service(ChromeDriverManager().install())
-            driver = webdriver.Chrome(service=service, options=chrome_options)
-        except Exception:
-            driver = webdriver.Chrome(options=chrome_options)
-            
-        return driver
-
-    def rodar_validacao_selenium():
+    def rodar_validacao_online():
         col_antigo_name = col_antigo
         col_novo_name = col_novo
 
@@ -153,168 +139,176 @@ else:
         aprovados_count = 0
         reprovados_count = 0
 
-        url_products = f"https://app.trustvox.com.br/{slug_empresa}/products"
         url_login = "https://app.trustvox.com.br/auth/login"
+        url_products = f"https://app.trustvox.com.br/{slug_empresa}/products"
 
-        status_box.info("🌐 Conectando diretamente aos servidores do Trustvox...")
-        driver = criar_driver_direto()
-        wait = WebDriverWait(driver, 20)
+        with sync_playwright() as p:
+            launch_args = {
+                "headless": True,
+                "args": ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
+            }
 
-        try:
-            # 1. Preenchimento de Login
-            status_box.info(f"🔑 Realizando login como {email_trustvox}...")
-            driver.get(url_login)
-            time.sleep(3)
+            if usar_proxy and proxy_ip_porta:
+                launch_args["proxy"] = {
+                    "server": f"http://{proxy_ip_porta.strip()}",
+                    "username": proxy_user.strip(),
+                    "password": proxy_pass.strip()
+                }
 
-            campo_email = wait.until(EC.presence_of_element_located((By.NAME, "email")))
-            campo_senha = driver.find_element(By.NAME, "password")
-            
-            campo_email.clear()
-            campo_email.send_keys(email_trustvox)
-            campo_senha.clear()
-            campo_senha.send_keys(senha_trustvox)
-            
-            btn_entrar = driver.find_element(By.XPATH, "//button[@type='submit' or contains(text(), 'Entrar')]")
-            btn_entrar.click()
-            time.sleep(5)
-
-            # 2. Transição de Seleção de Empresa (company-selection)
-            if "company-selection" in driver.current_url or "company_selection" in driver.current_url or len(driver.find_elements(By.XPATH, "//input[contains(@placeholder, 'empresa')]")) > 0:
-                status_box.info(f"🏢 Selecionando a empresa '{slug_empresa}'...")
-                try:
-                    inp_search = wait.until(EC.presence_of_element_located((By.XPATH, "//input[contains(@placeholder, 'empresa') or @type='text']")))
-                    inp_search.clear()
-                    inp_search.send_keys(slug_empresa)
-                    time.sleep(1.5)
-
-                    opcao_empresa = wait.until(EC.element_to_be_clickable((By.XPATH, f"//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '{slug_empresa}')]")))
-                    opcao_empresa.click()
-                    time.sleep(4)
-                except Exception as err_comp:
-                    status_box.warning(f"Navegando diretamente após login: {err_comp}")
-
-            status_box.info(f"🚀 Acessando {url_products}...")
-            driver.get(url_products)
-            time.sleep(3)
-
-        except Exception as login_err:
-            status_box.error(f"❌ Falha de login/autenticação: {login_err}")
-            driver.quit()
-            return df_input
-
-        # 3. Processamento de Produtos
-        for cont, idx in enumerate(indices, start=1):
-            val_raw = df_input.at[idx, col_antigo_name]
-            cod_antigo = str(int(val_raw)).strip() if pd.notna(val_raw) and isinstance(val_raw, (int, float)) else str(val_raw).strip()
-
-            val_novo_raw = df_input.at[idx, col_novo_name]
-            cod_novo = str(int(val_novo_raw)).strip() if pd.notna(val_novo_raw) and isinstance(val_novo_raw, (int, float)) else str(val_novo_raw).strip()
-
-            linha_excel = idx + 2
-            status_val = "REPROVADO"
-            obs = ""
+            status_box.info("🌐 Inicializando navegador na nuvem...")
+            browser = p.chromium.launch(**launch_args)
+            context = browser.new_context()
+            page = context.new_page()
 
             try:
-                driver.get(url_products)
-                time.sleep(2)
+                # 1. Login (Vídeo 0:00 - 0:15)
+                status_box.info(f"🔑 Realizando login como {email_trustvox}...")
+                page.goto(url_login, wait_until="domcontentloaded", timeout=35000)
+                page.wait_for_timeout(2000)
 
-                # A. Clicar em Filtrar
-                btn_filtrar = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'Filtrar')]")))
-                driver.execute_script("arguments[0].click();", btn_filtrar)
-                time.sleep(0.8)
+                if "login" in page.url or page.locator("input[name='email']").is_visible():
+                    page.fill("input[name='email']", email_trustvox)
+                    page.fill("input[name='password']", senha_trustvox)
+                    page.click("button[type='submit']")
+                    page.wait_for_timeout(4000)
 
-                # B. Clicar em Código do Produto
-                opcao_codigo = wait.until(EC.element_to_be_clickable((By.XPATH, "//*[contains(text(), 'Código do Produto')]")))
-                driver.execute_script("arguments[0].click();", opcao_codigo)
-                time.sleep(0.8)
+                # 2. Seleção de empresa no company-selection (Vídeo 0:16 - 0:21)
+                if "company-selection" in page.url or "company_selection" in page.url or page.locator("input[placeholder*='empresa']").is_visible():
+                    status_box.info(f"🏢 Buscando empresa '{slug_empresa}' na lista...")
+                    try:
+                        input_search = page.locator("input[placeholder*='empresa'], input[type='text']").first
+                        input_search.fill(slug_empresa)
+                        page.wait_for_timeout(1500)
 
-                # C. Inserir Código Antigo no campo flutuante
-                campo_input = wait.until(EC.presence_of_element_located((By.XPATH, "//div[contains(@class, 'popover') or contains(@class, 'modal') or contains(@class, 'filter')]//input | //input[not(@type='hidden')]")))
-                campo_input.click()
-                campo_input.send_keys(Keys.CONTROL + "a")
-                campo_input.send_keys(Keys.DELETE)
-                campo_input.send_keys(cod_antigo)
-                time.sleep(0.5)
+                        opcao_empresa = page.locator(f"text={slug_empresa}").first
+                        opcao_empresa.click()
+                        page.wait_for_timeout(3000)
+                    except Exception as err_company:
+                        status_box.warning(f"Aviso de navegação: {err_company}")
 
-                # D. Clicar em Confirmar
-                btn_confirmar = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'Confirmar')]")))
-                driver.execute_script("arguments[0].click();", btn_confirmar)
-                time.sleep(2.5)
+                # 3. Navegação direta para /products (Vídeo 0:22 - 0:27)
+                status_box.info(f"🚀 Acessando {url_products}...")
+                page.goto(url_products, wait_until="domcontentloaded", timeout=30000)
+                page.wait_for_timeout(2000)
 
-                # E. Clicar na linha do resultado
-                linha_prod = driver.find_elements(By.XPATH, f"//tr[contains(., '{cod_antigo}')] | //tbody/tr")
-                
-                if len(linha_prod) > 0:
-                    driver.execute_script("arguments[0].click();", linha_prod[0])
-                    time.sleep(2)
+            except Exception as login_err:
+                status_box.error(f"❌ Falha de login/autenticação: {login_err}")
+                browser.close()
+                return df_input
 
-                    # F. Clicar em 'Link original'
-                    janela_original = driver.current_window_handle
-                    btn_link = wait.until(EC.element_to_be_clickable((By.XPATH, "//*[contains(text(), 'Link original')]")))
-                    driver.execute_script("arguments[0].click();", btn_link)
-                    time.sleep(3)
+            # Loop de validação produto a produto
+            for cont, idx in enumerate(indices, start=1):
+                val_raw = df_input.at[idx, col_antigo_name]
+                cod_antigo = str(int(val_raw)).strip() if pd.notna(val_raw) and isinstance(val_raw, (int, float)) else str(val_raw).strip()
 
-                    novas_janelas = [j for j in driver.window_handles if j != janela_original]
-                    if len(novas_janelas) > 0:
-                        driver.switch_to.window(novas_janelas[0])
+                val_novo_raw = df_input.at[idx, col_novo_name]
+                cod_novo = str(int(val_novo_raw)).strip() if pd.notna(val_novo_raw) and isinstance(val_novo_raw, (int, float)) else str(val_novo_raw).strip()
 
-                    # G. Ler _productId via Console JS da nova aba
-                    product_id_console = driver.execute_script("""
-                        if (window._trustvox && Array.isArray(window._trustvox)) {
-                            for (let item of window._trustvox) {
-                                if (Array.isArray(item) && item[0] === '_productId') {
-                                    return String(item[1]);
+                linha_excel = idx + 2
+                status_val = "REPROVADO"
+                obs = ""
+
+                try:
+                    # Sempre garante retornar à tela de produtos da empresa antes do filtro
+                    if page.url != url_products:
+                        page.goto(url_products, wait_until="domcontentloaded")
+                        page.wait_for_timeout(1500)
+
+                    # A. Clica em 'Filtrar' (Vídeo 0:31)
+                    btn_filtrar = page.locator("button:has-text('Filtrar')").first
+                    btn_filtrar.click(timeout=8000)
+                    page.wait_for_timeout(600)
+
+                    # B. Clica em 'Código do Produto' (Vídeo 0:33)
+                    opcao_codigo = page.locator("text=Código do Produto").first
+                    opcao_codigo.click(timeout=8000)
+                    page.wait_for_timeout(600)
+
+                    # C. Preenche o código antigo na caixa flutuante (Vídeo 0:34 - 0:37)
+                    input_popup = page.locator("div[class*='popover'] input, div[class*='modal'] input, div[class*='filter'] input").first
+                    if not input_popup.is_visible():
+                        input_popup = page.locator("input").filter(has_not=page.locator("header input")).last
+
+                    input_popup.click(timeout=5000)
+                    input_popup.fill(cod_antigo)
+                    page.wait_for_timeout(500)
+
+                    # D. Clica em 'Confirmar' (Vídeo 0:38)
+                    btn_confirmar = page.locator("button:has-text('Confirmar')").first
+                    btn_confirmar.click(timeout=5000)
+                    page.wait_for_timeout(2500)
+
+                    # E. Clica na linha correspondente na tabela (Vídeo 0:41 - 0:43)
+                    linha_produto = page.locator(f"tr:has-text('{cod_antigo}'), tbody tr").first
+
+                    if linha_produto.is_visible():
+                        linha_produto.click(timeout=8000)
+                        page.wait_for_timeout(2000)
+
+                        # F. Clica em 'Link original' e intercepta a nova aba (Vídeo 0:46 - 0:52)
+                        with context.expect_page(timeout=12000) as new_page_info:
+                            page.click("text=Link original", timeout=8000)
+                        
+                        page_site = new_page_info.value
+                        page_site.wait_for_load_state("domcontentloaded")
+                        page_site.wait_for_timeout(2500)
+
+                        # G. Avaliação da variável global _productId no e-commerce (Vídeo 0:53 - 1:05)
+                        product_id_console = page_site.evaluate("""
+                            () => {
+                                if (window._trustvox && Array.isArray(window._trustvox)) {
+                                    for (let item of window._trustvox) {
+                                        if (Array.isArray(item) && item[0] === '_productId') {
+                                            return String(item[1]);
+                                        }
+                                    }
                                 }
+                                if (window._trustvox && typeof window._trustvox === 'object') {
+                                    return String(window._trustvox._productId || window._trustvox.product_id || '');
+                                }
+                                return null;
                             }
-                        }
-                        if (window._trustvox && typeof window._trustvox === 'object') {
-                            return String(window._trustvox._productId || window._trustvox.product_id || '');
-                        }
-                        return null;
-                    """)
+                        """)
 
-                    html_site = driver.page_source
+                        html_site = page_site.content()
+                        page_site.close()
 
-                    if len(novas_janelas) > 0:
-                        driver.close()
-                        driver.switch_to.window(janela_original)
-
-                    if product_id_console and str(product_id_console).strip() == cod_novo:
-                        status_val = "APROVADO"
-                        obs = f"_productId ({product_id_console}) verificado no site"
-                    elif cod_novo in html_site:
-                        status_val = "APROVADO"
-                        obs = "Código novo localizado no HTML da página"
+                        if product_id_console and str(product_id_console).strip() == cod_novo:
+                            status_val = "APROVADO"
+                            obs = f"_productId ({product_id_console}) verificado no site"
+                        elif cod_novo in html_site:
+                            status_val = "APROVADO"
+                            obs = "Código novo localizado no HTML da página"
+                        else:
+                            obs = f"Esperado: {cod_novo} | Retornado: {product_id_console}"
                     else:
-                        obs = f"Esperado: {cod_novo} | Retornado: {product_id_console}"
+                        obs = f"Código {cod_antigo} não encontrado na busca"
+
+                except Exception as e:
+                    obs = f"Falha na navegação: {str(e).splitlines()[0]}"
+
+                if status_val == "APROVADO":
+                    aprovados_count += 1
+                    log_box.success(f"Linha {linha_excel} | ID {cod_antigo} ➔ {cod_novo} | ✅ APROVADO")
                 else:
-                    obs = f"Código {cod_antigo} não encontrado na busca"
+                    reprovados_count += 1
+                    log_box.error(f"Linha {linha_excel} | ID {cod_antigo} ➔ {cod_novo} | ❌ REPROVADO ({obs})")
 
-            except Exception as e:
-                obs = f"Erro na navegação: {str(e).splitlines()[0]}"
+                df_input.at[idx, col_status_nome] = status_val
+                df_input.at[idx, col_obs_nome] = obs
 
-            if status_val == "APROVADO":
-                aprovados_count += 1
-                log_box.success(f"Linha {linha_excel} | ID {cod_antigo} ➔ {cod_novo} | ✅ APROVADO")
-            else:
-                reprovados_count += 1
-                log_box.error(f"Linha {linha_excel} | ID {cod_antigo} ➔ {cod_novo} | ❌ REPROVADO ({obs})")
+                kpi_total.metric("Analisados", f"{cont}/{len(indices)}")
+                kpi_ok.metric("Aprovados", f"{aprovados_count}")
+                kpi_err.metric("Reprovados", f"{reprovados_count}")
 
-            df_input.at[idx, col_status_nome] = status_val
-            df_input.at[idx, col_obs_nome] = obs
+                progress_bar.progress(cont / len(indices))
 
-            kpi_total.metric("Analisados", f"{cont}/{len(indices)}")
-            kpi_ok.metric("Aprovados", f"{aprovados_count}")
-            kpi_err.metric("Reprovados", f"{reprovados_count}")
-
-            progress_bar.progress(cont / len(indices))
-
-        driver.quit()
-        return df_input
+            browser.close()
+            return df_input
 
     if btn_iniciar:
-        with st.spinner("Iniciando validação direta no servidor..."):
-            df_final = rodar_validacao_selenium()
+        with st.spinner("Iniciando processamento no servidor..."):
+            df_final = rodar_validacao_online()
 
             status_box.success("🎉 Validação concluída com sucesso!")
 

@@ -1,6 +1,8 @@
+import os
+import time
 import pandas as pd
-import requests
 import streamlit as st
+from playwright.sync_api import sync_playwright
 
 st.set_page_config(
     page_title="Trustvox Studio | Online Migration",
@@ -45,7 +47,7 @@ with st.sidebar:
         index=0
     )
 
-st.title("🛡️ Trustvox Migration Studio — Execução Online (Via API)")
+st.title("🛡️ Trustvox Migration Studio — Execução Online")
 
 if arquivo_enviado is None or not slug_empresa:
     st.info("👈 Informe suas credenciais, slug e suba a planilha na barra lateral para iniciar.")
@@ -99,7 +101,7 @@ else:
         st.divider()
         tabela_live = st.empty()
 
-    def rodar_validacao_api():
+    def rodar_validacao_playwright_sync():
         col_antigo_name = col_antigo
         col_novo_name = col_novo
 
@@ -118,135 +120,156 @@ else:
         aprovados_count = 0
         reprovados_count = 0
 
-        session = requests.Session()
-        session.headers.update({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "application/json, text/plain, */*"
-        })
+        url_login = f"https://app.trustvox.com.br/empresas/{slug_empresa}/produtos"
+        url_loja = f"https://app.trustvox.com.br/{slug_empresa}/products"
 
-        if usar_proxy and proxy_ip_porta:
-            proxy_url = f"http://{proxy_user.strip()}:{proxy_pass.strip()}@{proxy_ip_porta.strip()}"
-            session.proxies = {
-                "http": proxy_url,
-                "https": proxy_url
+        with sync_playwright() as p:
+            launch_args = {
+                "headless": True,
+                "args": ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
             }
 
-        status_box.info("🌐 Efetuando login e estabelecendo sessão com a Trustvox...")
+            if usar_proxy and proxy_ip_porta:
+                launch_args["proxy"] = {
+                    "server": f"http://{proxy_ip_porta.strip()}",
+                    "username": proxy_user.strip(),
+                    "password": proxy_pass.strip()
+                }
 
-        # 1. Login na plataforma
-        url_login = "https://app.trustvox.com.br/auth/login"
-        payload_login = {
-            "email": email_trustvox,
-            "password": senha_trustvox
-        }
+            status_box.info("🌐 Inicializando navegador Chromium...")
+            browser = p.chromium.launch(**launch_args)
+            context = browser.new_context()
+            page = context.new_page()
 
-        try:
-            res_login = session.post(url_login, data=payload_login, timeout=20)
-            if res_login.status_code not in [200, 302] and "login" in res_login.url:
-                status_box.error("❌ Falha na autenticação: Verifique o e-mail/senha ou a conexão do Proxy.")
-                return df_input
-            status_box.info(f"🚀 Iniciando validação dos produtos da empresa {slug_empresa}...")
-        except Exception as e:
-            status_box.error(f"Erro na conexão com o servidor da Trustvox: {e}")
-            return df_input
-
-        # 2. Endpoints de consulta de produtos na Trustvox
-        url_api_produtos = f"https://app.trustvox.com.br/api/empresas/{slug_empresa}/produtos"
-        url_web_produtos = f"https://app.trustvox.com.br/empresas/{slug_empresa}/produtos"
-
-        for cont, idx in enumerate(indices, start=1):
-            val_raw = df_input.at[idx, col_antigo_name]
-            if pd.notna(val_raw):
-                cod_antigo = str(int(val_raw)).strip() if isinstance(val_raw, (int, float)) and val_raw == val_raw else str(val_raw).strip()
-            else:
-                cod_antigo = ""
-
-            val_novo_raw = df_input.at[idx, col_novo_name]
-            if pd.notna(val_novo_raw):
-                cod_novo = str(int(val_novo_raw)).strip() if isinstance(val_novo_raw, (int, float)) and val_novo_raw == val_novo_raw else str(val_novo_raw).strip()
-            else:
-                cod_novo = ""
-
-            linha_excel = idx + 2
-            status_val = "REPROVADO"
-            obs = ""
+            status_box.info("🔑 Autenticando na Trustvox...")
 
             try:
-                # Consulta via API/JSON do filtro por código
-                params = {"query": cod_antigo, "code": cod_antigo}
-                res_prod = session.get(url_api_produtos, params=params, timeout=15)
+                page.goto(url_login, wait_until="domcontentloaded", timeout=35000)
+                page.wait_for_timeout(2000)
 
-                if res_prod.status_code == 200:
-                    data = res_prod.json()
-                    # Verifica se o código antigo consta na resposta
-                    produtos = data.get("items", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
-                    
-                    encontrado = False
-                    for p in produtos:
-                        p_code = str(p.get("code", "") or p.get("product_id", "")).strip()
-                        if p_code == cod_antigo:
-                            encontrado = True
-                            p_url = p.get("url", "")
-                            
-                            # Verifica o _productId na página do site se houver URL
-                            if p_url:
-                                try:
-                                    res_site = requests.get(p_url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
-                                    if cod_novo in res_site.text:
-                                        status_val = "APROVADO"
-                                        obs = f"Código {cod_novo} verificado na página do produto"
-                                    else:
-                                        status_val = "APROVADO"
-                                        obs = f"Código {cod_antigo} localizado no Trustvox"
-                                except Exception:
-                                    status_val = "APROVADO"
-                                    obs = f"Código {cod_antigo} localizado na API do Trustvox"
-                            else:
-                                status_val = "APROVADO"
-                                obs = f"Código {cod_antigo} localizado na API do Trustvox"
-                            break
+                if "login" in page.url or page.locator("input[name='email']").is_visible():
+                    page.fill("input[name='email']", email_trustvox)
+                    page.fill("input[name='password']", senha_trustvox)
+                    page.click("button[type='submit']")
+                    page.wait_for_timeout(4000)
 
-                    if not encontrado:
-                        # Fallback por busca HTML na página web de produtos
-                        res_web = session.get(f"{url_web_produtos}?search={cod_antigo}", timeout=15)
-                        if cod_antigo in res_web.text:
-                            status_val = "APROVADO"
-                            obs = f"Código {cod_antigo} localizado no catálogo do Trustvox"
-                        else:
-                            obs = f"Código {cod_antigo} não encontrado na busca"
+                status_box.info(f"🚀 Iniciando validação dos produtos da empresa {slug_empresa}...")
+
+            except Exception as login_err:
+                status_box.error(f"Falha na autenticação/conexão: {login_err}")
+                browser.close()
+                return df_input
+
+            for cont, idx in enumerate(indices, start=1):
+                val_raw = df_input.at[idx, col_antigo_name]
+                if pd.notna(val_raw):
+                    cod_antigo = str(int(val_raw)).strip() if isinstance(val_raw, (int, float)) and val_raw == val_raw else str(val_raw).strip()
                 else:
-                    # Fallback caso a API responda em HTML
-                    res_web = session.get(f"{url_web_produtos}?search={cod_antigo}", timeout=15)
-                    if cod_antigo in res_web.text:
-                        status_val = "APROVADO"
-                        obs = f"Código {cod_antigo} localizado no catálogo do Trustvox"
+                    cod_antigo = ""
+
+                val_novo_raw = df_input.at[idx, col_novo_name]
+                if pd.notna(val_novo_raw):
+                    cod_novo = str(int(val_novo_raw)).strip() if isinstance(val_novo_raw, (int, float)) and val_novo_raw == val_novo_raw else str(val_novo_raw).strip()
+                else:
+                    cod_novo = ""
+
+                linha_excel = idx + 2
+                status_val = "REPROVADO"
+                obs = ""
+
+                try:
+                    page.goto(url_loja, wait_until="domcontentloaded")
+                    page.wait_for_timeout(1000)
+
+                    # Executa a filtragem exata do script local
+                    btn_filtrar = page.locator("button:has-text('Filtrar')").first
+                    btn_filtrar.click(timeout=8000)
+                    page.wait_for_timeout(500)
+
+                    opcao_codigo = page.locator("text=Código do Produto").first
+                    opcao_codigo.click(timeout=8000)
+                    page.wait_for_timeout(500)
+
+                    input_popup = page.locator("div[class*='popover'] input, div[class*='modal'] input, div[class*='filter'] input").first
+                    if not input_popup.is_visible():
+                        input_popup = page.locator("input").filter(has_not=page.locator("header input")).last
+
+                    input_popup.click(timeout=5000)
+                    input_popup.fill(cod_antigo)
+                    page.wait_for_timeout(400)
+
+                    btn_confirmar = page.locator("button:has-text('Confirmar')").first
+                    btn_confirmar.click(timeout=5000)
+                    page.wait_for_timeout(2500)
+
+                    linha_produto = page.locator(f"tr:has-text('{cod_antigo}'), tbody tr").first
+                    
+                    if linha_produto.is_visible():
+                        linha_produto.click(timeout=8000)
+                        page.wait_for_timeout(2000)
+
+                        with context.expect_page(timeout=12000) as new_page_info:
+                            page.click("text=Link original", timeout=8000)
+                        
+                        page_site = new_page_info.value
+                        page_site.wait_for_load_state("domcontentloaded")
+                        page_site.wait_for_timeout(2500)
+
+                        product_id_console = page_site.evaluate("""
+                            () => {
+                                if (window._trustvox && Array.isArray(window._trustvox)) {
+                                    for (let item of window._trustvox) {
+                                        if (Array.isArray(item) && item[0] === '_productId') {
+                                            return String(item[1]);
+                                        }
+                                    }
+                                }
+                                if (window._trustvox && typeof window._trustvox === 'object') {
+                                    return String(window._trustvox._productId || window._trustvox.product_id || '');
+                                }
+                                return null;
+                            }
+                        """)
+
+                        html_site = page_site.content()
+                        page_site.close()
+
+                        if product_id_console and str(product_id_console).strip() == cod_novo:
+                            status_val = "APROVADO"
+                            obs = f"_productId ({product_id_console}) verificado no site"
+                        elif cod_novo in html_site:
+                            status_val = "APROVADO"
+                            obs = "Código novo localizado no HTML da página"
+                        else:
+                            obs = f"Esperado: {cod_novo} | Retornado: {product_id_console}"
                     else:
                         obs = f"Código {cod_antigo} não encontrado na busca"
 
-            except Exception as e:
-                obs = f"Erro na requisição: {str(e).splitlines()[0]}"
+                except Exception as e:
+                    obs = f"Falha na automação: {str(e).splitlines()[0]}"
 
-            if status_val == "APROVADO":
-                aprovados_count += 1
-                log_box.success(f"Linha {linha_excel} | ID {cod_antigo} ➔ {cod_novo} | ✅ APROVADO")
-            else:
-                reprovados_count += 1
-                log_box.error(f"Linha {linha_excel} | ID {cod_antigo} ➔ {cod_novo} | ❌ REPROVADO ({obs})")
+                if status_val == "APROVADO":
+                    aprovados_count += 1
+                    log_box.success(f"Linha {linha_excel} | ID {cod_antigo} ➔ {cod_novo} | ✅ APROVADO")
+                else:
+                    reprovados_count += 1
+                    log_box.error(f"Linha {linha_excel} | ID {cod_antigo} ➔ {cod_novo} | ❌ REPROVADO ({obs})")
 
-            df_input.at[idx, 'Status Validação'] = status_val
-            df_input.at[idx, 'Observação Validação'] = obs
+                df_input.at[idx, 'Status Validação'] = status_val
+                df_input.at[idx, 'Observação Validação'] = obs
 
-            kpi_total.metric("Analisados", f"{cont}/{len(indices)}")
-            kpi_ok.metric("Aprovados", f"{aprovados_count}")
-            kpi_err.metric("Reprovados", f"{reprovados_count}")
+                kpi_total.metric("Analisados", f"{cont}/{len(indices)}")
+                kpi_ok.metric("Aprovados", f"{aprovados_count}")
+                kpi_err.metric("Reprovados", f"{reprovados_count}")
 
-            progress_bar.progress(cont / len(indices))
+                progress_bar.progress(cont / len(indices))
 
-        return df_input
+            browser.close()
+            return df_input
 
     if btn_iniciar:
-        with st.spinner("Iniciando processamento via requisições diretas..."):
-            df_final = rodar_validacao_api()
+        with st.spinner("Executando validação no servidor..."):
+            df_final = rodar_validacao_playwright_sync()
 
             status_box.success("🎉 Validação concluída com sucesso!")
 

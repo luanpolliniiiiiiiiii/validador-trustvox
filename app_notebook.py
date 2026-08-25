@@ -106,6 +106,73 @@ else:
         st.divider()
         tabela_live = st.empty()
 
+    def realizar_login_autenticado(session):
+        url_login_page = "https://app.trustvox.com.br/auth/login"
+        
+        # Passo 1: Obter cookies iniciais de navegação
+        try:
+            res_page = session.get(url_login_page, timeout=15)
+        except Exception as e:
+            return False, f"Erro ao acessar página de login: {str(e)}"
+
+        # Passo 2: Tentar login via JSON API e Form Payload
+        endpoints_login = [
+            ("https://app.trustvox.com.br/api/auth/login", "json"),
+            ("https://app.trustvox.com.br/auth/login", "json"),
+            ("https://app.trustvox.com.br/auth/login", "data")
+        ]
+
+        payload = {
+            "email": email_trustvox,
+            "password": senha_trustvox,
+            "user": {
+                "email": email_trustvox,
+                "password": senha_trustvox
+            }
+        }
+
+        login_efetuado = False
+        detalhe_erro = ""
+
+        for endpoint, tipo in endpoints_login:
+            try:
+                if tipo == "json":
+                    res = session.post(
+                        endpoint, 
+                        json={"email": email_trustvox, "password": senha_trustvox},
+                        headers={"X-Requested-With": "XMLHttpRequest", "Accept": "application/json"},
+                        timeout=15
+                    )
+                else:
+                    res = session.post(
+                        endpoint, 
+                        data={"email": email_trustvox, "password": senha_trustvox},
+                        timeout=15
+                    )
+
+                # Verifica se gerou cookies de sessão ou se redirecionou para fora da página de login
+                cookies_sessao = session.cookies.get_dict()
+                if res.status_code in [200, 302] and not ("login" in res.url and res.status_code == 200 and "password" in res.text):
+                    login_efetuado = True
+                    break
+                elif len(cookies_sessao) > 1:
+                    login_efetuado = True
+                    break
+            except Exception as err:
+                detalhe_erro = str(err)
+
+        if not login_efetuado:
+            return False, "Credenciais inválidas ou resposta não reconhecida da API de login."
+
+        # Passo 3: Estabelecer contexto na empresa selecionada
+        url_empresa = f"https://app.trustvox.com.br/{slug_empresa}"
+        try:
+            session.get(url_empresa, timeout=15)
+        except Exception:
+            pass
+
+        return True, "Autenticado com sucesso!"
+
     def rodar_validacao_api():
         col_antigo_name = col_antigo
         col_novo_name = col_novo
@@ -131,31 +198,26 @@ else:
         session = requests.Session()
         session.headers.update({
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "application/json, text/plain, */*"
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7"
         })
 
         if usar_proxy and proxy_ip_porta:
             proxy_url = f"http://{proxy_user.strip()}:{proxy_pass.strip()}@{proxy_ip_porta.strip()}"
             session.proxies = {"http": proxy_url, "https": proxy_url}
 
-        status_box.info("🔑 Estabelecendo conexão e autenticando na Trustvox...")
+        status_box.info("🔑 Estabelecendo sessão de login e obtendo tokens na Trustvox...")
 
-        url_login = "https://app.trustvox.com.br/auth/login"
-        payload_login = {
-            "email": email_trustvox,
-            "password": senha_trustvox
-        }
+        sucesso_login, msg_login = realizar_login_autenticado(session)
 
-        try:
-            res_login = session.post(url_login, data=payload_login, timeout=20)
-            status_box.info(f"🚀 Iniciando validação dos produtos da empresa {slug_empresa}...")
-        except Exception as e:
-            status_box.error(f"Erro na conexão de login: {e}")
+        if not sucesso_login:
+            status_box.error(f"❌ Falha no login: {msg_login}")
             return df_input
 
-        # Endpoints de busca interna do catálogo do Trustvox
+        status_box.success(f"🎉 Login confirmado! Iniciando validação na empresa '{slug_empresa}'...")
+
+        url_products_page = f"https://app.trustvox.com.br/{slug_empresa}/products"
         url_api_search = f"https://app.trustvox.com.br/api/stores/{slug_empresa}/products"
-        url_products_html = f"https://app.trustvox.com.br/{slug_empresa}/products"
 
         for cont, idx in enumerate(indices, start=1):
             val_raw = df_input.at[idx, col_antigo_name]
@@ -169,12 +231,17 @@ else:
             obs = ""
 
             try:
-                # 1. Tenta consulta pela API REST/JSON interna de produtos
-                res_api = session.get(url_api_search, params={"code": cod_antigo, "query": cod_antigo}, timeout=10)
-                
                 encontrado = False
                 p_url = None
 
+                # 1. Consulta via Endpoint da API interna de produtos
+                res_api = session.get(
+                    url_api_search, 
+                    params={"code": cod_antigo, "query": cod_antigo, "search": cod_antigo}, 
+                    headers={"Accept": "application/json"},
+                    timeout=12
+                )
+                
                 if res_api.status_code == 200:
                     try:
                         data = res_api.json()
@@ -188,13 +255,13 @@ else:
                     except Exception:
                         pass
 
-                # 2. Se a API JSON não trouxer direto, faz a checagem no catálogo
+                # 2. Caso a API de busca não retorne JSON, verifica pela resposta autenticada do catálogo
                 if not encontrado:
-                    res_html = session.get(f"{url_products_html}?search={cod_antigo}", timeout=10)
+                    res_html = session.get(f"{url_products_page}?search={cod_antigo}", timeout=12)
                     if res_html.status_code == 200 and cod_antigo in res_html.text:
                         encontrado = True
 
-                # 3. Validação do código no e-commerce se a URL do produto estiver disponível
+                # 3. Validação do código no e-commerce se houver URL do produto
                 if encontrado:
                     if p_url:
                         try:
@@ -261,5 +328,4 @@ else:
                     if col not in colunas_exibicao:
                         colunas_exibicao.append(col)
 
-                tabela_live.dataframe(df_final[colunas_exibicao], use_container_width=True)
                 tabela_live.dataframe(df_final[colunas_exibicao], use_container_width=True)

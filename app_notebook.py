@@ -25,19 +25,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Lista de proxies disponíveis
-PROXIES_DISPONIVEIS = [
-    "31.59.20.176:6754",
-    "45.38.107.97:6014",
-    "198.105.121.200:6462",
-    "64.137.96.74:6641",
-    "198.23.243.226:6361",
-    "38.154.185.97:6370",
-    "84.247.60.125:6095",
-    "142.111.67.146:5611",
-    "194.39.32.164:6461"
-]
-
 with st.sidebar:
     st.title("📚 Fontes & Empresa")
     
@@ -55,21 +42,6 @@ with st.sidebar:
         "Slug da Empresa no Trustvox:",
         value="coty"
     ).strip().lower()
-
-    st.divider()
-    st.subheader("🌐 Configuração de Proxy")
-    usar_proxy = st.checkbox("Ativar Proxy de Saída", value=True)
-    
-    proxy_ip_porta = st.selectbox(
-        "Selecionar Servidor Proxy:",
-        PROXIES_DISPONIVEIS,
-        index=0
-    )
-    
-    rotacionar_auto = st.checkbox("Tentar outro proxy automaticamente se falhar", value=True)
-    
-    proxy_user = st.text_input("Usuário do Proxy:", value="mxjcpfer")
-    proxy_pass = st.text_input("Senha do Proxy:", type="password", value="f080q5vj4ys9")
 
     st.divider()
     arquivo_enviado = st.file_uploader(
@@ -137,7 +109,7 @@ else:
         st.divider()
         tabela_live = st.empty()
 
-    def criar_driver_online(proxy_alvo):
+    def criar_driver_direto():
         chrome_options = Options()
         chrome_options.add_argument("--headless=new")
         chrome_options.add_argument("--no-sandbox")
@@ -145,12 +117,6 @@ else:
         chrome_options.add_argument("--disable-gpu")
         chrome_options.add_argument("--window-size=1920,1080")
         chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-
-        if usar_proxy and proxy_alvo:
-            if proxy_user and proxy_pass:
-                chrome_options.add_argument(f"--proxy-server=http://{proxy_user.strip()}:{proxy_pass.strip()}@{proxy_alvo.strip()}")
-            else:
-                chrome_options.add_argument(f"--proxy-server=http://{proxy_alvo.strip()}")
 
         for path in ["/usr/bin/chromium", "/usr/bin/chromium-browser", "/usr/bin/google-chrome"]:
             if os.path.exists(path):
@@ -190,37 +156,32 @@ else:
         url_products = f"https://app.trustvox.com.br/{slug_empresa}/products"
         url_login = "https://app.trustvox.com.br/auth/login"
 
-        lista_tentativas_proxy = [proxy_ip_porta]
-        if rotacionar_auto:
-            lista_tentativas_proxy.extend([p for p in PROXIES_DISPONIVEIS if p != proxy_ip_porta])
+        status_box.info("🌐 Conectando diretamente aos servidores do Trustvox...")
+        driver = criar_driver_direto()
+        wait = WebDriverWait(driver, 20)
 
-        driver = None
-        login_sucesso = False
+        try:
+            # 1. Preenchimento de Login
+            status_box.info(f"🔑 Realizando login como {email_trustvox}...")
+            driver.get(url_login)
+            time.sleep(3)
 
-        for proxy_atual in lista_tentativas_proxy:
-            status_box.info(f"🌐 Conectando via Proxy {proxy_atual}...")
-            try:
-                driver = criar_driver_online(proxy_atual)
-                wait = WebDriverWait(driver, 15)
+            campo_email = wait.until(EC.presence_of_element_located((By.NAME, "email")))
+            campo_senha = driver.find_element(By.NAME, "password")
+            
+            campo_email.clear()
+            campo_email.send_keys(email_trustvox)
+            campo_senha.clear()
+            campo_senha.send_keys(senha_trustvox)
+            
+            btn_entrar = driver.find_element(By.XPATH, "//button[@type='submit' or contains(text(), 'Entrar')]")
+            btn_entrar.click()
+            time.sleep(5)
 
-                status_box.info(f"🔑 Preenchendo login ({email_trustvox})...")
-                driver.get(url_login)
-                time.sleep(3)
-
-                campo_email = wait.until(EC.presence_of_element_located((By.NAME, "email")))
-                campo_senha = driver.find_element(By.NAME, "password")
-                
-                campo_email.clear()
-                campo_email.send_keys(email_trustvox)
-                campo_senha.clear()
-                campo_senha.send_keys(senha_trustvox)
-                
-                btn_entrar = driver.find_element(By.XPATH, "//button[@type='submit' or contains(text(), 'Entrar')]")
-                btn_entrar.click()
-                time.sleep(5)
-
-                if "company-selection" in driver.current_url or "company_selection" in driver.current_url or len(driver.find_elements(By.XPATH, "//input[contains(@placeholder, 'empresa')]")) > 0:
-                    status_box.info(f"🏢 Selecionando empresa '{slug_empresa}'...")
+            # 2. Transição de Seleção de Empresa (company-selection)
+            if "company-selection" in driver.current_url or "company_selection" in driver.current_url or len(driver.find_elements(By.XPATH, "//input[contains(@placeholder, 'empresa')]")) > 0:
+                status_box.info(f"🏢 Selecionando a empresa '{slug_empresa}'...")
+                try:
                     inp_search = wait.until(EC.presence_of_element_located((By.XPATH, "//input[contains(@placeholder, 'empresa') or @type='text']")))
                     inp_search.clear()
                     inp_search.send_keys(slug_empresa)
@@ -229,25 +190,19 @@ else:
                     opcao_empresa = wait.until(EC.element_to_be_clickable((By.XPATH, f"//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '{slug_empresa}')]")))
                     opcao_empresa.click()
                     time.sleep(4)
+                except Exception as err_comp:
+                    status_box.warning(f"Navegando diretamente após login: {err_comp}")
 
-                status_box.info(f"🚀 Acessando modulo de produtos...")
-                driver.get(url_products)
-                time.sleep(3)
+            status_box.info(f"🚀 Acessando {url_products}...")
+            driver.get(url_products)
+            time.sleep(3)
 
-                login_sucesso = True
-                break
-
-            except Exception as login_err:
-                if driver:
-                    driver.quit()
-                status_box.warning(f"⚠️ Proxy {proxy_atual} falhou. Tentando próximo...")
-
-        if not login_sucesso or not driver:
-            status_box.error("❌ Não foi possível realizar o login com nenhum dos proxies informados.")
+        except Exception as login_err:
+            status_box.error(f"❌ Falha de login/autenticação: {login_err}")
+            driver.quit()
             return df_input
 
-        wait = WebDriverWait(driver, 15)
-
+        # 3. Processamento de Produtos
         for cont, idx in enumerate(indices, start=1):
             val_raw = df_input.at[idx, col_antigo_name]
             cod_antigo = str(int(val_raw)).strip() if pd.notna(val_raw) and isinstance(val_raw, (int, float)) else str(val_raw).strip()
@@ -263,14 +218,17 @@ else:
                 driver.get(url_products)
                 time.sleep(2)
 
+                # A. Clicar em Filtrar
                 btn_filtrar = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'Filtrar')]")))
                 driver.execute_script("arguments[0].click();", btn_filtrar)
                 time.sleep(0.8)
 
+                # B. Clicar em Código do Produto
                 opcao_codigo = wait.until(EC.element_to_be_clickable((By.XPATH, "//*[contains(text(), 'Código do Produto')]")))
                 driver.execute_script("arguments[0].click();", opcao_codigo)
                 time.sleep(0.8)
 
+                # C. Inserir Código Antigo no campo flutuante
                 campo_input = wait.until(EC.presence_of_element_located((By.XPATH, "//div[contains(@class, 'popover') or contains(@class, 'modal') or contains(@class, 'filter')]//input | //input[not(@type='hidden')]")))
                 campo_input.click()
                 campo_input.send_keys(Keys.CONTROL + "a")
@@ -278,16 +236,19 @@ else:
                 campo_input.send_keys(cod_antigo)
                 time.sleep(0.5)
 
+                # D. Clicar em Confirmar
                 btn_confirmar = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'Confirmar')]")))
                 driver.execute_script("arguments[0].click();", btn_confirmar)
                 time.sleep(2.5)
 
+                # E. Clicar na linha do resultado
                 linha_prod = driver.find_elements(By.XPATH, f"//tr[contains(., '{cod_antigo}')] | //tbody/tr")
                 
                 if len(linha_prod) > 0:
                     driver.execute_script("arguments[0].click();", linha_prod[0])
                     time.sleep(2)
 
+                    # F. Clicar em 'Link original'
                     janela_original = driver.current_window_handle
                     btn_link = wait.until(EC.element_to_be_clickable((By.XPATH, "//*[contains(text(), 'Link original')]")))
                     driver.execute_script("arguments[0].click();", btn_link)
@@ -297,6 +258,7 @@ else:
                     if len(novas_janelas) > 0:
                         driver.switch_to.window(novas_janelas[0])
 
+                    # G. Ler _productId via Console JS da nova aba
                     product_id_console = driver.execute_script("""
                         if (window._trustvox && Array.isArray(window._trustvox)) {
                             for (let item of window._trustvox) {
@@ -329,7 +291,7 @@ else:
                     obs = f"Código {cod_antigo} não encontrado na busca"
 
             except Exception as e:
-                obs = f"Erro no processamento: {str(e).splitlines()[0]}"
+                obs = f"Erro na navegação: {str(e).splitlines()[0]}"
 
             if status_val == "APROVADO":
                 aprovados_count += 1
@@ -351,7 +313,7 @@ else:
         return df_input
 
     if btn_iniciar:
-        with st.spinner("Iniciando validação online com rotação de proxy..."):
+        with st.spinner("Iniciando validação direta no servidor..."):
             df_final = rodar_validacao_selenium()
 
             status_box.success("🎉 Validação concluída com sucesso!")

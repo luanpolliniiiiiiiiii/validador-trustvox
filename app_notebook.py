@@ -70,8 +70,12 @@ if arquivo_enviado and slug_empresa:
         col_antigo_name = col_antigo
         col_novo_name = col_novo
 
-        df_input['Status Validação'] = 'Não Testado'
-        df_input['Observação Validação'] = '-'
+        # Garante nomes únicos para as colunas de validação
+        col_status_nome = 'Status Validação'
+        col_obs_nome = 'Observação Validação'
+
+        df_input[col_status_nome] = 'Não Testado'
+        df_input[col_obs_nome] = '-'
 
         total_rows = len(df_input)
 
@@ -96,7 +100,6 @@ if arquivo_enviado and slug_empresa:
 
         status_box.info("🌐 Autenticando na Trustvox...")
 
-        # Autenticação via POST
         url_login = "https://app.trustvox.com.br/auth/login"
         payload_login = {"email": email_trustvox, "password": senha_trustvox}
 
@@ -111,37 +114,36 @@ if arquivo_enviado and slug_empresa:
 
         for cont, idx in enumerate(indices, start=1):
             val_raw = df_input.at[idx, col_antigo_name]
-            cod_antigo = str(int(val_raw)).strip() if pd.notna(val_raw) and isinstance(val_raw, (int, float)) else str(val_raw).strip()
+            cod_antigo_val = str(int(val_raw)).strip() if pd.notna(val_raw) and isinstance(val_raw, (int, float)) else str(val_raw).strip()
 
             val_novo_raw = df_input.at[idx, col_novo_name]
-            cod_novo = str(int(val_novo_raw)).strip() if pd.notna(val_novo_raw) and isinstance(val_novo_raw, (int, float)) else str(val_novo_raw).strip()
+            cod_novo_val = str(int(val_novo_raw)).strip() if pd.notna(val_novo_raw) and isinstance(val_novo_raw, (int, float)) else str(val_novo_raw).strip()
 
             linha_excel = idx + 2
             status_val = "REPROVADO"
             obs = ""
 
             try:
-                # Realiza a busca no painel do Trustvox
-                res_busca = session.get(f"{url_produtos}?search={cod_antigo}", timeout=10)
+                res_busca = session.get(f"{url_produtos}?search={cod_antigo_val}", timeout=10)
                 
-                if res_busca.status_code == 200 and cod_antigo in res_busca.text:
+                if res_busca.status_code == 200 and cod_antigo_val in res_busca.text:
                     status_val = "APROVADO"
-                    obs = f"Código {cod_antigo} localizado no catálogo"
+                    obs = f"Código {cod_antigo_val} localizado no catálogo"
                 else:
-                    obs = f"Código {cod_antigo} não encontrado na busca"
+                    obs = f"Código {cod_antigo_val} não encontrado na busca"
 
             except Exception as e:
                 obs = f"Erro na requisição: {str(e).splitlines()[0]}"
 
             if status_val == "APROVADO":
                 aprovados_count += 1
-                log_box.success(f"Linha {linha_excel} | ID {cod_antigo} ➔ {cod_novo} | ✅ APROVADO")
+                log_box.success(f"Linha {linha_excel} | ID {cod_antigo_val} ➔ {cod_novo_val} | ✅ APROVADO")
             else:
                 reprovados_count += 1
-                log_box.error(f"Linha {linha_excel} | ID {cod_antigo} ➔ {cod_novo} | ❌ REPROVADO ({obs})")
+                log_box.error(f"Linha {linha_excel} | ID {cod_antigo_val} ➔ {cod_novo_val} | ❌ REPROVADO ({obs})")
 
-            df_input.at[idx, 'Status Validação'] = status_val
-            df_input.at[idx, 'Observação Validação'] = obs
+            df_input.at[idx, col_status_nome] = status_val
+            df_input.at[idx, col_obs_nome] = obs
 
             progress_bar.progress(cont / len(indices))
 
@@ -152,4 +154,11 @@ if arquivo_enviado and slug_empresa:
             df_final = rodar_validacao_http()
 
             status_box.success("🎉 Validação concluída com sucesso!")
-            st.dataframe(df_final[['Status Validação', col_antigo, col_novo, 'Observação Validação']], use_container_width=True)
+
+            # Tratamento de colunas para exibição sem duplicatas
+            colunas_exibicao = []
+            for col in ['Status Validação', col_antigo, col_novo, 'Observação Validação']:
+                if col not in colunas_exibicao:
+                    colunas_exibicao.append(col)
+
+            st.dataframe(df_final[colunas_exibicao], use_container_width=True)

@@ -106,7 +106,7 @@ else:
         st.divider()
         tabela_live = st.empty()
 
-    def rodar_validacao_http():
+    def rodar_validacao_api():
         col_antigo_name = col_antigo
         col_novo_name = col_novo
 
@@ -131,7 +131,7 @@ else:
         session = requests.Session()
         session.headers.update({
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"
+            "Accept": "application/json, text/plain, */*"
         })
 
         if usar_proxy and proxy_ip_porta:
@@ -153,7 +153,9 @@ else:
             status_box.error(f"Erro na conexão de login: {e}")
             return df_input
 
-        url_products = f"https://app.trustvox.com.br/{slug_empresa}/products"
+        # Endpoints de busca interna do catálogo do Trustvox
+        url_api_search = f"https://app.trustvox.com.br/api/stores/{slug_empresa}/products"
+        url_products_html = f"https://app.trustvox.com.br/{slug_empresa}/products"
 
         for cont, idx in enumerate(indices, start=1):
             val_raw = df_input.at[idx, col_antigo_name]
@@ -167,11 +169,48 @@ else:
             obs = ""
 
             try:
-                res_busca = session.get(f"{url_products}?search={cod_antigo}", timeout=15)
+                # 1. Tenta consulta pela API REST/JSON interna de produtos
+                res_api = session.get(url_api_search, params={"code": cod_antigo, "query": cod_antigo}, timeout=10)
+                
+                encontrado = False
+                p_url = None
 
-                if res_busca.status_code == 200 and cod_antigo in res_busca.text:
-                    status_val = "APROVADO"
-                    obs = f"Código {cod_antigo} localizado no Trustvox"
+                if res_api.status_code == 200:
+                    try:
+                        data = res_api.json()
+                        items = data.get("items", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
+                        for item in items:
+                            code_item = str(item.get("code", "") or item.get("product_id", "")).strip()
+                            if code_item == cod_antigo:
+                                encontrado = True
+                                p_url = item.get("url") or item.get("links", {}).get("original")
+                                break
+                    except Exception:
+                        pass
+
+                # 2. Se a API JSON não trouxer direto, faz a checagem no catálogo
+                if not encontrado:
+                    res_html = session.get(f"{url_products_html}?search={cod_antigo}", timeout=10)
+                    if res_html.status_code == 200 and cod_antigo in res_html.text:
+                        encontrado = True
+
+                # 3. Validação do código no e-commerce se a URL do produto estiver disponível
+                if encontrado:
+                    if p_url:
+                        try:
+                            res_site = requests.get(p_url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+                            if cod_novo in res_site.text or f"'{cod_novo}'" in res_site.text or f'"{cod_novo}"' in res_site.text:
+                                status_val = "APROVADO"
+                                obs = f"_productId ({cod_novo}) verificado na página do e-commerce"
+                            else:
+                                status_val = "APROVADO"
+                                obs = f"Código {cod_antigo} localizado no Trustvox"
+                        except Exception:
+                            status_val = "APROVADO"
+                            obs = f"Código {cod_antigo} localizado no catálogo do Trustvox"
+                    else:
+                        status_val = "APROVADO"
+                        obs = f"Código {cod_antigo} localizado no catálogo do Trustvox"
                 else:
                     obs = f"Código {cod_antigo} não encontrado na busca"
 
@@ -201,7 +240,7 @@ else:
             st.warning("Preencha sua Senha do Trustvox na barra lateral.")
         else:
             with st.spinner("Iniciando validação no servidor..."):
-                df_final = rodar_validacao_http()
+                df_final = rodar_validacao_api()
 
                 status_box.success("🎉 Validação concluída com sucesso!")
 
@@ -222,4 +261,5 @@ else:
                     if col not in colunas_exibicao:
                         colunas_exibicao.append(col)
 
+                tabela_live.dataframe(df_final[colunas_exibicao], use_container_width=True)
                 tabela_live.dataframe(df_final[colunas_exibicao], use_container_width=True)

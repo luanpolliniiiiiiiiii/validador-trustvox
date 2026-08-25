@@ -1,6 +1,7 @@
 import os
 import sys
 import time
+import subprocess
 import pandas as pd
 import streamlit as st
 from playwright.sync_api import sync_playwright
@@ -127,19 +128,30 @@ else:
         url_login = "https://app.trustvox.com.br/auth/login"
         url_products = f"https://app.trustvox.com.br/{slug_empresa}/products"
 
+        # Garante que as dependências do Playwright sejam instaladas no ambiente da nuvem
+        try:
+            status_box.info("🔧 Verificando dependências do Chromium no servidor...")
+            subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
+        except Exception as install_err:
+            status_box.error(f"❌ Falha ao instalar dependências do Chromium: {install_err}")
+
         with sync_playwright() as p:
             status_box.info("🌐 Inicializando Chromium em conexão direta...")
 
-            browser = p.chromium.launch(
-                headless=True,
-                timeout=30000,
-                args=[
-                    "--no-sandbox",
-                    "--disable-setuid-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--disable-gpu"
-                ]
-            )
+            try:
+                browser = p.chromium.launch(
+                    headless=True,
+                    timeout=30000,
+                    args=[
+                        "--no-sandbox",
+                        "--disable-setuid-sandbox",
+                        "--disable-dev-shm-usage",
+                        "--disable-gpu"
+                    ]
+                )
+            except Exception as launch_err:
+                status_box.error(f"❌ Erro ao abrir Chromium (Ambiente em Nuvem): {launch_err}")
+                return df_input
 
             context = browser.new_context(
                 viewport={"width": 1920, "height": 1080},

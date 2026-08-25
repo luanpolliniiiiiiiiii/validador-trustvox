@@ -1,18 +1,17 @@
-import subprocess
+import os
 import sys
+import subprocess
+import asyncio
+import pandas as pd
+import streamlit as st
 
-
+# Instalação automática do Playwright e Chromium no Streamlit Cloud
 try:
-    import playwright
+    from playwright.async_api import async_playwright
 except ImportError:
     subprocess.run([sys.executable, "-m", "pip", "install", "playwright"])
     subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"])
-
-import asyncio
-import os
-import pandas as pd
-import streamlit as st
-from playwright.async_api import async_playwright
+    from playwright.async_api import async_playwright
 
 st.set_page_config(
     page_title="Trustvox Studio Online",
@@ -20,12 +19,14 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("🛡️ Trustvox Migration Studio — Execução Online")
-st.caption("Validação remota via Playwright com suporte a Proxy de Saída")
+st.title("🛡️ Trustvox Migration Studio — Execução Online com Login")
+st.caption("Validação remota via Playwright com autenticação e Proxy de Saída")
 
-# --- SIDEBAR: CONFIGURAÇÕES E PROXY ---
+# --- SIDEBAR: LOGIN, CONFIGURAÇÕES E PROXY ---
 with st.sidebar:
-    st.title("⚙️ Configurações")
+    st.title("🔑 Credenciais Trustvox")
+    email_trustvox = st.text_input("E-mail Trustvox:", value="luan.araujo@reclameaqui.com.br")
+    senha_trustvox = st.text_input("Senha Trustvox:", type="password")
     slug_empresa = st.text_input("Slug da Empresa:", value="coty").strip().lower()
     
     st.divider()
@@ -35,10 +36,11 @@ with st.sidebar:
     proxy_user = st.text_input("Usuário do Proxy:", value="mxjcpfer")
     proxy_pass = st.text_input("Senha do Proxy:", type="password", value="f080q5vj4ys9")
 
+    st.divider()
     arquivo_enviado = st.file_uploader("Carregar Planilha De/Para", type=["xlsx", "csv"])
 
 if not arquivo_enviado or not slug_empresa:
-    st.info("👈 **Para começar:** Informe o slug da empresa, configure o proxy e suba a planilha na barra lateral.")
+    st.info("👈 **Para começar:** Informe seu e-mail, senha, slug da empresa e suba a planilha na barra lateral.")
 else:
     if arquivo_enviado.name.endswith('.csv'):
         df_input = pd.read_csv(arquivo_enviado)
@@ -47,7 +49,6 @@ else:
 
     cols_lista = list(df_input.columns)
     
-    # Mapeamento para tentar encontrar automaticamente as colunas de CÓDIGO (ignorando nomes)
     col_antigo_default = next((c for c in cols_lista if any(k in str(c).lower() for k in ['cod', 'código', 'codigo', 'id_antigo'])), cols_lista[0])
     col_novo_default = next((c for c in cols_lista if any(k in str(c).lower() for k in ['novo', 'para', 'id_novo'])), cols_lista[1] if len(cols_lista) > 1 else cols_lista[0])
 
@@ -63,8 +64,8 @@ else:
     progress_bar = st.progress(0)
     log_box = st.container(height=300)
 
-    # --- LÓGICA DE AUTOMATION VIA PLAYWRIGHT + PROXY ---
-    async def rodar_validacao_online():
+    # --- LÓGICA DE LOGIN E AUTOMAÇÃO COM PLAYWRIGHT ---
+    async def rodar_validacao_com_login():
         df_input['Status Validação'] = 'Não Testado'
         df_input['Observação'] = '-'
 
@@ -72,16 +73,14 @@ else:
         aprovados_count = 0
         reprovados_count = 0
 
-        url_loja = f"https://app.trustvox.com.br/{slug_empresa}/products"
+        url_login = f"https://app.trustvox.com.br/empresas/{slug_empresa}/produtos"
 
         async with async_playwright() as p:
-            # Configuração das opções de inicialização do navegador
             launch_args = {
-                "headless": True, # Headless obrigatório no Streamlit Cloud
+                "headless": True,
                 "args": ["--no-sandbox", "--disable-setuid-sandbox"]
             }
 
-            # Injeção das credenciais do Proxy se ativado
             if usar_proxy and proxy_ip_porta:
                 launch_args["proxy"] = {
                     "server": f"http://{proxy_ip_porta.strip()}",
@@ -93,17 +92,36 @@ else:
             context = await browser.new_context()
             page = await context.new_page()
 
-            status_box.info(f"🌐 Conectando à Trustvox via Proxy ({proxy_ip_porta})...")
+            status_box.info(f"🌐 Conectando à Trustvox via Proxy e realizando login...")
             
+            # ETAPA DE LOGIN
             try:
-                await page.goto(url_loja, wait_until="domcontentloaded", timeout=30000)
+                await page.goto(url_login, wait_until="domcontentloaded", timeout=30000)
                 await page.wait_for_timeout(2000)
+
+                # Verifica se caiu na página de login
+                if "login" in page.url or await page.locator("input[name='email']").is_visible():
+                    log_box.info("Inserindo e-mail e senha para autenticação...")
+                    await page.fill("input[name='email']", email_trustvox)
+                    await page.fill("input[name='password']", senha_trustvox)
+                    await page.click("button[type='submit']")
+                    await page.wait_for_timeout(4000)
+
+                if "login" in page.url:
+                    status_box.error("❌ Falha na autenticação: Verifique suas credenciais de login ou a conexão do Proxy.")
+                    await browser.close()
+                    return df_input
+
+                status_box.success("🎉 Login efetuado com sucesso via Proxy!")
+
             except Exception as e:
-                status_box.error(f"Erro ao acessar Trustvox via Proxy: {e}")
+                status_box.error(f"Erro durante a conexão/login: {e}")
                 await browser.close()
                 return df_input
 
-            # Loop por 100% dos itens da planilha
+            # LOOP DE VALIDAÇÃO DOS ITENS DA PLANILHA
+            url_loja = f"https://app.trustvox.com.br/{slug_empresa}/products"
+
             for idx in range(total_rows):
                 val_antigo = str(df_input.at[idx, col_antigo]).strip()
                 val_novo = str(df_input.at[idx, col_novo]).strip()
@@ -116,15 +134,15 @@ else:
                     await page.goto(url_loja, wait_until="domcontentloaded")
                     await page.wait_for_timeout(1000)
 
-                    # 1. Clicar em Filtrar
+                    # 1. Filtrar
                     btn_filtrar = page.locator("button:has-text('Filtrar')").first
                     await btn_filtrar.click(timeout=6000)
 
-                    # 2. Clicar em Código do Produto
+                    # 2. Selecionar Código do Produto
                     opcao_codigo = page.locator("text=Código do Produto").first
                     await opcao_codigo.click(timeout=6000)
 
-                    # 3. Preencher a caixa de texto
+                    # 3. Digitar o Código
                     input_popup = page.locator("div[class*='popover'] input, div[class*='filter'] input").first
                     await input_popup.fill(val_antigo)
 
@@ -133,16 +151,16 @@ else:
                     await btn_confirmar.click(timeout=6000)
                     await page.wait_for_timeout(2000)
 
-                    # 5. Avaliar Tabela de Resultados
+                    # 5. Avaliar resultado na página
                     page_content = await page.content()
                     if val_antigo in page_content or val_novo in page_content:
                         status_val = "APROVADO"
-                        obs = "Código localizado na tabela do Trustvox"
+                        obs = "Código localizado na tabela"
                     else:
-                        obs = f"Código {val_antigo} não retornou resultados na busca"
+                        obs = f"Código {val_antigo} não localizado"
 
                 except Exception as err:
-                    obs = f"Falha ao processar item: {str(err)}"
+                    obs = f"Falha na busca: {str(err)}"
 
                 if status_val == "APROVADO":
                     aprovados_count += 1
@@ -160,20 +178,23 @@ else:
             return df_input
 
     if btn_iniciar:
-        with st.spinner("Executando validação via Playwright com Proxy..."):
-            df_final = asyncio.run(rodar_validacao_online())
-            status_box.success("🎉 Validação concluída!")
+        if not email_trustvox or not senha_trustvox:
+            st.warning("Preencha seu E-mail e Senha na barra lateral antes de iniciar.")
+        else:
+            with st.spinner("Autenticando e validando planilha via Proxy..."):
+                df_final = asyncio.run(rodar_validacao_com_login())
+                status_box.success("🎉 Validação concluída!")
 
-            nome_saida = f"relatorio_{slug_empresa}_online.xlsx"
-            df_final.to_excel(nome_saida, index=False)
+                nome_saida = f"relatorio_{slug_empresa}_com_login.xlsx"
+                df_final.to_excel(nome_saida, index=False)
 
-            st.dataframe(df_final[['Status Validação', col_antigo, col_novo, 'Observação']], use_container_width=True)
+                st.dataframe(df_final[['Status Validação', col_antigo, col_novo, 'Observação']], use_container_width=True)
 
-            with open(nome_saida, "rb") as file:
-                st.download_button(
-                    label="📥 Baixar Relatório Consolidado (Excel)",
-                    data=file,
-                    file_name=nome_saida,
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True
-                )
+                with open(nome_saida, "rb") as file:
+                    st.download_button(
+                        label="📥 Baixar Relatório Consolidado (Excel)",
+                        data=file,
+                        file_name=nome_saida,
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True
+                    )

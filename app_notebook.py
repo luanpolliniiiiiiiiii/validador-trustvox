@@ -5,24 +5,17 @@ import asyncio
 import pandas as pd
 import streamlit as st
 
-# Garante instalação das dependências do Playwright no Debian do Streamlit Cloud
 try:
     from playwright.async_api import async_playwright
 except ImportError:
     subprocess.run([sys.executable, "-m", "pip", "install", "playwright"])
-    subprocess.run([sys.executable, "-m", "playwright", "install", "--with-deps", "chromium"])
+    subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"])
     from playwright.async_api import async_playwright
 
-st.set_page_config(
-    page_title="Trustvox Studio Online",
-    page_icon="🛡️",
-    layout="wide"
-)
+st.set_page_config(page_title="Trustvox Studio Online", page_icon="🛡️", layout="wide")
 
 st.title("🛡️ Trustvox Migration Studio — Execução Online com Login")
-st.caption("Validação remota via Playwright com autenticação e Proxy de Saída")
 
-# --- SIDEBAR: LOGIN, CONFIGURAÇÕES E PROXY ---
 with st.sidebar:
     st.title("🔑 Credenciais Trustvox")
     email_trustvox = st.text_input("E-mail Trustvox:", value="luan.araujo@reclameaqui.com.br")
@@ -39,16 +32,13 @@ with st.sidebar:
     st.divider()
     arquivo_enviado = st.file_uploader("Carregar Planilha De/Para", type=["xlsx", "csv"])
 
-if not arquivo_enviado or not slug_empresa:
-    st.info("👈 **Para começar:** Informe seu e-mail, senha, slug da empresa e suba a planilha na barra lateral.")
-else:
+if arquivo_enviado and slug_empresa:
     if arquivo_enviado.name.endswith('.csv'):
         df_input = pd.read_csv(arquivo_enviado)
     else:
         df_input = pd.read_excel(arquivo_enviado)
 
     cols_lista = list(df_input.columns)
-    
     col_antigo_default = next((c for c in cols_lista if any(k in str(c).lower() for k in ['cod', 'código', 'codigo', 'id_antigo'])), cols_lista[0])
     col_novo_default = next((c for c in cols_lista if any(k in str(c).lower() for k in ['novo', 'para', 'id_novo'])), cols_lista[1] if len(cols_lista) > 1 else cols_lista[0])
 
@@ -64,7 +54,6 @@ else:
     progress_bar = st.progress(0)
     log_box = st.container(height=300)
 
-    # --- LÓGICA DE LOGIN E AUTOMAÇÃO COM PLAYWRIGHT ---
     async def rodar_validacao_com_login():
         df_input['Status Validação'] = 'Não Testado'
         df_input['Observação'] = '-'
@@ -76,72 +65,46 @@ else:
         url_login = f"https://app.trustvox.com.br/empresas/{slug_empresa}/produtos"
 
         async with async_playwright() as p:
-            # Garante a execução dos binários no ambiente do Streamlit Cloud
-            try:
-                if usar_proxy and proxy_ip_porta:
-                    browser = await p.chromium.launch(
-                        headless=True,
-                        args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
-                        proxy={
-                            "server": f"http://{proxy_ip_porta.strip()}",
-                            "username": proxy_user.strip(),
-                            "password": proxy_pass.strip()
-                        }
-                    )
-                else:
-                    browser = await p.chromium.launch(
-                        headless=True,
-                        args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
-                    )
-            except Exception as launch_error:
-                # Fallback instalando dependências faltantes do Chromium
-                subprocess.run([sys.executable, "-m", "playwright", "install", "--with-deps", "chromium"])
-                if usar_proxy and proxy_ip_porta:
-                    browser = await p.chromium.launch(
-                        headless=True,
-                        args=["--no-sandbox", "--disable-setuid-sandbox"],
-                        proxy={
-                            "server": f"http://{proxy_ip_porta.strip()}",
-                            "username": proxy_user.strip(),
-                            "password": proxy_pass.strip()
-                        }
-                    )
-                else:
-                    browser = await p.chromium.launch(
-                        headless=True,
-                        args=["--no-sandbox", "--disable-setuid-sandbox"]
-                    )
+            launch_kwargs = {
+                "headless": True,
+                "args": ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
+            }
 
+            if usar_proxy and proxy_ip_porta:
+                launch_kwargs["proxy"] = {
+                    "server": f"http://{proxy_ip_porta.strip()}",
+                    "username": proxy_user.strip(),
+                    "password": proxy_pass.strip()
+                }
+
+            browser = await p.chromium.launch(**launch_kwargs)
             context = await browser.new_context()
             page = await context.new_page()
 
-            status_box.info("🌐 Conectando à Trustvox e realizando login...")
+            status_box.info("🌐 Conectando à Trustvox...")
             
-            # ETAPA DE LOGIN
             try:
                 await page.goto(url_login, wait_until="domcontentloaded", timeout=35000)
                 await page.wait_for_timeout(2000)
 
                 if "login" in page.url or await page.locator("input[name='email']").is_visible():
-                    log_box.info("Inserindo credenciais de login...")
                     await page.fill("input[name='email']", email_trustvox)
                     await page.fill("input[name='password']", senha_trustvox)
                     await page.click("button[type='submit']")
                     await page.wait_for_timeout(4000)
 
                 if "login" in page.url:
-                    status_box.error("❌ Falha na autenticação: Verifique suas credenciais ou a estabilidade do Proxy.")
+                    status_box.error("❌ Falha na autenticação: Verifique credenciais ou o Proxy.")
                     await browser.close()
                     return df_input
 
-                status_box.success("🎉 Login efetuado com sucesso no servidor da nuvem!")
+                status_box.success("🎉 Autenticado com sucesso!")
 
             except Exception as e:
-                status_box.error(f"Erro na conexão com o servidor/login: {e}")
+                status_box.error(f"Erro ao conectar: {e}")
                 await browser.close()
                 return df_input
 
-            # LOOP DE VALIDAÇÃO DA PLANILHA
             url_loja = f"https://app.trustvox.com.br/{slug_empresa}/products"
 
             for idx in range(total_rows):
@@ -172,7 +135,7 @@ else:
                     page_content = await page.content()
                     if val_antigo in page_content or val_novo in page_content:
                         status_val = "APROVADO"
-                        obs = "Código localizado na tabela"
+                        obs = "Código localizado"
                     else:
                         obs = f"Código {val_antigo} não localizado"
 
@@ -196,22 +159,30 @@ else:
 
     if btn_iniciar:
         if not email_trustvox or not senha_trustvox:
-            st.warning("Preencha seu E-mail e Senha na barra lateral antes de iniciar.")
+            st.warning("Preencha seu E-mail e Senha na barra lateral.")
         else:
-            with st.spinner("Iniciando instância headless do Chromium..."):
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+
+            if loop and loop.is_running():
+                df_final = loop.run_until_complete(rodar_validacao_com_login())
+            else:
                 df_final = asyncio.run(rodar_validacao_com_login())
-                status_box.success("🎉 Validação concluída!")
 
-                nome_saida = f"relatorio_{slug_empresa}_online.xlsx"
-                df_final.to_excel(nome_saida, index=False)
+            status_box.success("🎉 Validação concluída!")
+            nome_saida = f"relatorio_{slug_empresa}_online.xlsx"
+            df_final.to_excel(nome_saida, index=False)
 
-                st.dataframe(df_final[['Status Validação', col_antigo, col_novo, 'Observação']], use_container_width=True)
+            st.dataframe(df_final[['Status Validação', col_antigo, col_novo, 'Observação']], use_container_width=True)
 
-                with open(nome_saida, "rb") as file:
-                    st.download_button(
-                        label="📥 Baixar Relatório Consolidado (Excel)",
-                        data=file,
-                        file_name=nome_saida,
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        use_container_width=True
+            with open(nome_saida, "rb") as file:
+                st.download_button(
+                    label="📥 Baixar Relatório Consolidado (Excel)",
+                    data=file,
+                    file_name=nome_saida,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
                     )

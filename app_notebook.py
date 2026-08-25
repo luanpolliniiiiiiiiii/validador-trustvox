@@ -1,3 +1,13 @@
+import subprocess
+import sys
+
+
+try:
+    import playwright
+except ImportError:
+    subprocess.run([sys.executable, "-m", "pip", "install", "playwright"])
+    subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"])
+
 import asyncio
 import os
 import pandas as pd

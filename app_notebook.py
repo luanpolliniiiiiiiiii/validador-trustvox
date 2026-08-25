@@ -159,7 +159,7 @@ else:
 
         status_box.info("🌐 Inicializando navegador Chromium...")
         driver = criar_driver_online()
-        wait = WebDriverWait(driver, 15)
+        wait = WebDriverWait(driver, 10)
 
         try:
             status_box.info("🔑 Realizando autenticação na Trustvox...")
@@ -207,73 +207,81 @@ else:
                 driver.get(url_loja)
                 time.sleep(1.5)
 
-                btn_filtrar = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'Filtrar')]")))
-                btn_filtrar.click()
-                time.sleep(0.5)
+                try:
+                    btn_filtrar = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'Filtrar')]")))
+                    driver.execute_script("arguments[0].click();", btn_filtrar)
+                    time.sleep(0.5)
 
-                opcao_codigo = wait.until(EC.element_to_be_clickable((By.XPATH, "//*[contains(text(), 'Código do Produto')]")))
-                opcao_codigo.click()
-                time.sleep(0.5)
+                    opcao_codigo = wait.until(EC.element_to_be_clickable((By.XPATH, "//*[contains(text(), 'Código do Produto')]")))
+                    driver.execute_script("arguments[0].click();", opcao_codigo)
+                    time.sleep(0.5)
 
-                inputs = driver.find_elements(By.CSS_SELECTOR, "div[class*='popover'] input, div[class*='modal'] input, div[class*='filter'] input")
-                input_popup = inputs[0] if len(inputs) > 0 else driver.find_elements(By.TAG_NAME, "input")[-1]
-                input_popup.click()
-                input_popup.clear()
-                input_popup.send_keys(cod_antigo)
-                time.sleep(0.4)
+                    inputs = driver.find_elements(By.CSS_SELECTOR, "div[class*='popover'] input, div[class*='modal'] input, div[class*='filter'] input")
+                    input_popup = inputs[0] if len(inputs) > 0 else driver.find_elements(By.TAG_NAME, "input")[-1]
+                    input_popup.click()
+                    input_popup.clear()
+                    input_popup.send_keys(cod_antigo)
+                    time.sleep(0.4)
 
-                btn_confirmar = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'Confirmar')]")))
-                btn_confirmar.click()
-                time.sleep(2.5)
+                    btn_confirmar = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'Confirmar')]")))
+                    driver.execute_script("arguments[0].click();", btn_confirmar)
+                    time.sleep(2)
+                except Exception:
+                    driver.get(f"{url_loja}?search={cod_antigo}")
+                    time.sleep(2)
 
                 linhas_tabela = driver.find_elements(By.XPATH, f"//tr[contains(., '{cod_antigo}')] | //tbody/tr")
                 
                 if len(linhas_tabela) > 0:
-                    linhas_tabela[0].click()
-                    time.sleep(2)
+                    driver.execute_script("arguments[0].click();", linhas_tabela[0])
+                    time.sleep(1.5)
 
                     janela_original = driver.current_window_handle
-                    btn_link = wait.until(EC.element_to_be_clickable((By.XPATH, "//*[contains(text(), 'Link original')]")))
-                    btn_link.click()
-                    time.sleep(2.5)
+                    btn_links = driver.find_elements(By.XPATH, "//*[contains(text(), 'Link original')]")
+                    
+                    if len(btn_links) > 0:
+                        driver.execute_script("arguments[0].click();", btn_links[0])
+                        time.sleep(2.5)
 
-                    novas_janelas = [j for j in driver.window_handles if j != janela_original]
-                    if len(novas_janelas) > 0:
-                        driver.switch_to.window(novas_janelas[0])
+                        novas_janelas = [j for j in driver.window_handles if j != janela_original]
+                        if len(novas_janelas) > 0:
+                            driver.switch_to.window(novas_janelas[0])
 
-                    product_id_console = driver.execute_script("""
-                        if (window._trustvox && Array.isArray(window._trustvox)) {
-                            for (let item of window._trustvox) {
-                                if (Array.isArray(item) && item[0] === '_productId') {
-                                    return String(item[1]);
+                        product_id_console = driver.execute_script("""
+                            if (window._trustvox && Array.isArray(window._trustvox)) {
+                                for (let item of window._trustvox) {
+                                    if (Array.isArray(item) && item[0] === '_productId') {
+                                        return String(item[1]);
+                                    }
                                 }
                             }
-                        }
-                        if (window._trustvox && typeof window._trustvox === 'object') {
-                            return String(window._trustvox._productId || window._trustvox.product_id || '');
-                        }
-                        return null;
-                    """)
+                            if (window._trustvox && typeof window._trustvox === 'object') {
+                                return String(window._trustvox._productId || window._trustvox.product_id || '');
+                            }
+                            return null;
+                        """)
 
-                    html_site = driver.page_source
+                        html_site = driver.page_source
 
-                    if len(novas_janelas) > 0:
-                        driver.close()
-                        driver.switch_to.window(janela_original)
+                        if len(novas_janelas) > 0:
+                            driver.close()
+                            driver.switch_to.window(janela_original)
 
-                    if product_id_console and str(product_id_console).strip() == cod_novo:
-                        status_val = "APROVADO"
-                        obs = f"_productId ({product_id_console}) verificado no site"
-                    elif cod_novo in html_site:
-                        status_val = "APROVADO"
-                        obs = "Código novo localizado no HTML da página"
+                        if product_id_console and str(product_id_console).strip() == cod_novo:
+                            status_val = "APROVADO"
+                            obs = f"_productId ({product_id_console}) verificado no site"
+                        elif cod_novo in html_site:
+                            status_val = "APROVADO"
+                            obs = "Código novo localizado no HTML da página"
+                        else:
+                            obs = f"Esperado: {cod_novo} | Retornado: {product_id_console}"
                     else:
-                        obs = f"Esperado: {cod_novo} | Retornado: {product_id_console}"
+                        obs = f"Produto localizado no Trustvox, mas sem botão 'Link original'"
                 else:
                     obs = f"Código {cod_antigo} não encontrado na busca"
 
             except Exception as e:
-                obs = f"Falha na navegação: {str(e)}"
+                obs = f"Erro na navegação: {str(e).splitlines()[0]}"
 
             if status_val == "APROVADO":
                 aprovados_count += 1

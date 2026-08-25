@@ -1,8 +1,6 @@
-import asyncio
-import os
 import pandas as pd
 import streamlit as st
-from playwright.async_api import async_playwright
+from playwright.sync_api import sync_playwright
 
 st.set_page_config(
     page_title="Trustvox Studio | Online Migration",
@@ -50,7 +48,7 @@ with st.sidebar:
 st.title("🛡️ Trustvox Migration Studio — Execução Online")
 
 if arquivo_enviado is None or not slug_empresa:
-    st.info("👈 Inform e suas credenciais, slug e suba a planilha na barra lateral para iniciar.")
+    st.info("👈 Informe suas credenciais, slug e suba a planilha na barra lateral para iniciar.")
 else:
     if arquivo_enviado.name.endswith('.csv'):
         df_input = pd.read_csv(arquivo_enviado)
@@ -101,7 +99,7 @@ else:
         st.divider()
         tabela_live = st.empty()
 
-    async def rodar_validacao_online():
+    def rodar_validacao_online_sync():
         col_antigo_name = col_antigo
         col_novo_name = col_novo
 
@@ -123,10 +121,18 @@ else:
         url_login = f"https://app.trustvox.com.br/empresas/{slug_empresa}/produtos"
         url_loja = f"https://app.trustvox.com.br/{slug_empresa}/products"
 
-        async with async_playwright() as p:
+        with sync_playwright() as p:
             launch_args = {
                 "headless": True,
-                "args": ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
+                "args": [
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu",
+                    "--no-first-run",
+                    "--no-zygote",
+                    "--single-process"
+                ]
             }
 
             if usar_proxy and proxy_ip_porta:
@@ -136,27 +142,28 @@ else:
                     "password": proxy_pass.strip()
                 }
 
-            browser = await p.chromium.launch(**launch_args)
-            context = await browser.new_context()
-            page = await context.new_page()
+            status_box.info("🌐 Inicializando Chromium headless...")
+            browser = p.chromium.launch(**launch_args)
+            context = browser.new_context()
+            page = context.new_page()
 
-            status_box.info("🌐 Conectando à Trustvox via Proxy e efetuando autenticação...")
+            status_box.info("🔑 Realizando login na Trustvox via Proxy...")
 
             try:
-                await page.goto(url_login, wait_until="domcontentloaded", timeout=30000)
-                await page.wait_for_timeout(2000)
+                page.goto(url_login, wait_until="domcontentloaded", timeout=35000)
+                page.wait_for_timeout(2000)
 
-                if "login" in page.url or await page.locator("input[name='email']").is_visible():
-                    await page.fill("input[name='email']", email_trustvox)
-                    await page.fill("input[name='password']", senha_trustvox)
-                    await page.click("button[type='submit']")
-                    await page.wait_for_timeout(4000)
+                if "login" in page.url or page.locator("input[name='email']").is_visible():
+                    page.fill("input[name='email']", email_trustvox)
+                    page.fill("input[name='password']", senha_trustvox)
+                    page.click("button[type='submit']")
+                    page.wait_for_timeout(4000)
 
                 status_box.info(f"🚀 Iniciando validação na empresa {slug_empresa}...")
 
             except Exception as login_err:
                 status_box.error(f"Falha de autenticação/conexão: {login_err}")
-                await browser.close()
+                browser.close()
                 return df_input
 
             for cont, idx in enumerate(indices, start=1):
@@ -177,43 +184,43 @@ else:
                 obs = ""
 
                 try:
-                    await page.goto(url_loja, wait_until="domcontentloaded")
-                    await page.wait_for_timeout(1000)
+                    page.goto(url_loja, wait_until="domcontentloaded")
+                    page.wait_for_timeout(1000)
 
                     btn_filtrar = page.locator("button:has-text('Filtrar')").first
-                    await btn_filtrar.click(timeout=8000)
-                    await page.wait_for_timeout(500)
+                    btn_filtrar.click(timeout=8000)
+                    page.wait_for_timeout(500)
 
                     opcao_codigo = page.locator("text=Código do Produto").first
-                    await opcao_codigo.click(timeout=8000)
-                    await page.wait_for_timeout(500)
+                    opcao_codigo.click(timeout=8000)
+                    page.wait_for_timeout(500)
 
                     input_popup = page.locator("div[class*='popover'] input, div[class*='modal'] input, div[class*='filter'] input").first
-                    if not await input_popup.is_visible():
+                    if not input_popup.is_visible():
                         input_popup = page.locator("input").filter(has_not=page.locator("header input")).last
 
-                    await input_popup.click(timeout=5000)
-                    await input_popup.fill(cod_antigo)
-                    await page.wait_for_timeout(400)
+                    input_popup.click(timeout=5000)
+                    input_popup.fill(cod_antigo)
+                    page.wait_for_timeout(400)
 
                     btn_confirmar = page.locator("button:has-text('Confirmar')").first
-                    await btn_confirmar.click(timeout=5000)
-                    await page.wait_for_timeout(2500)
+                    btn_confirmar.click(timeout=5000)
+                    page.wait_for_timeout(2500)
 
                     linha_produto = page.locator(f"tr:has-text('{cod_antigo}'), tbody tr").first
                     
-                    if await linha_produto.is_visible():
-                        await linha_produto.click(timeout=8000)
-                        await page.wait_for_timeout(2000)
+                    if linha_produto.is_visible():
+                        linha_produto.click(timeout=8000)
+                        page.wait_for_timeout(2000)
 
-                        async with context.expect_page(timeout=12000) as new_page_info:
-                            await page.click("text=Link original", timeout=8000)
+                        with context.expect_page(timeout=12000) as new_page_info:
+                            page.click("text=Link original", timeout=8000)
                         
-                        page_site = await new_page_info.value
-                        await page_site.wait_for_load_state("domcontentloaded")
-                        await page_site.wait_for_timeout(2500)
+                        page_site = new_page_info.value
+                        page_site.wait_for_load_state("domcontentloaded")
+                        page_site.wait_for_timeout(2500)
 
-                        product_id_console = await page_site.evaluate("""
+                        product_id_console = page_site.evaluate("""
                             () => {
                                 if (window._trustvox && Array.isArray(window._trustvox)) {
                                     for (let item of window._trustvox) {
@@ -229,8 +236,8 @@ else:
                             }
                         """)
 
-                        html_site = await page_site.content()
-                        await page_site.close()
+                        html_site = page_site.content()
+                        page_site.close()
 
                         if product_id_console and product_id_console.strip() == cod_novo:
                             status_val = "APROVADO"
@@ -262,20 +269,12 @@ else:
 
                 progress_bar.progress(cont / len(indices))
 
-            await browser.close()
+            browser.close()
             return df_input
 
     if btn_iniciar:
-        with st.spinner("Iniciando processamento assíncrono no Streamlit Cloud..."):
-            try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                loop = None
-
-            if loop and loop.is_running():
-                df_final = loop.run_until_complete(rodar_validacao_online())
-            else:
-                df_final = asyncio.run(rodar_validacao_online())
+        with st.spinner("Iniciando processamento no servidor..."):
+            df_final = rodar_validacao_online_sync()
 
             status_box.success("🎉 Validação concluída com sucesso!")
 

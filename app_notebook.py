@@ -1,190 +1,169 @@
-import streamlit as st
-import pandas as pd
-import time
+import asyncio
 import os
-
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from webdriver_manager.chrome import ChromeDriverManager
+import pandas as pd
+import streamlit as st
+from playwright.async_api import async_playwright
 
 st.set_page_config(
-    page_title="Validador Trustvox Online (via Proxy)",
-    page_icon="🌐",
+    page_title="Trustvox Studio Online",
+    page_icon="🛡️",
     layout="wide"
 )
 
-st.title("🌐 Validador de Migração De/Para — Trustvox Online")
-st.markdown("Execução em nuvem com rota por Proxy de saída e validação de 100% da planilha.")
+st.title("🛡️ Trustvox Migration Studio — Execução Online")
+st.caption("Validação remota via Playwright com suporte a Proxy de Saída")
 
-# --- BARRA LATERAL (PROXIES E CREDENCIAIS) ---
+# --- SIDEBAR: CONFIGURAÇÕES E PROXY ---
 with st.sidebar:
-    st.header("🔑 Credenciais Trustvox")
-    email = st.text_input("E-mail Trustvox", value="luan.araujo@reclameaqui.com.br")
-    senha = st.text_input("Senha Trustvox", type="password")
-    slug_empresa = st.text_input("Slug da Empresa (URL)", value="coty")
+    st.title("⚙️ Configurações")
+    slug_empresa = st.text_input("Slug da Empresa:", value="coty").strip().lower()
     
     st.divider()
-    st.header("🌐 Configuração de Proxy")
+    st.subheader("🌐 Configurações de Proxy")
     usar_proxy = st.checkbox("Ativar Proxy de Saída", value=True)
-    
-    # Preencha aqui com o IP:Porta do seu Proxy capturado
-    proxy_server = st.text_input("Servidor Proxy (IP:Porta)", value="104.28.26.92:80", help="Exemplo: IP:Porta ou usuario:senha@IP:Porta")
+    proxy_ip_porta = st.text_input("IP:Porta do Proxy:", value="31.59.20.176:6754")
+    proxy_user = st.text_input("Usuário do Proxy:", value="mxjcpfer")
+    proxy_pass = st.text_input("Senha do Proxy:", type="password", value="f080q5vj4ys9")
 
-# --- UPLOAD DE ARQUIVO ---
-uploaded_file = st.file_uploader("Selecione a planilha De/Para (.xlsx ou .csv)", type=["xlsx", "csv"])
+    arquivo_enviado = st.file_uploader("Carregar Planilha De/Para", type=["xlsx", "csv"])
 
-if uploaded_file:
-    try:
-        if uploaded_file.name.endswith('.csv'):
-            df = pd.read_csv(uploaded_file)
-        else:
-            df = pd.read_excel(uploaded_file)
-        
-        st.subheader("📋 Prévia da Planilha")
-        st.dataframe(df.head(5), use_container_width=True)
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            col_de = st.selectbox("Coluna Código ANTIGO (De):", df.columns)
-        with col2:
-            col_para = st.selectbox("Coluna Código NOVO (Para):", df.columns)
-            
-    except Exception as e:
-        st.error(f"Erro ao carregar planilha: {e}")
-
-# --- CRIAR DRIVER DO SELENIUM COM PROXY ---
-def criar_driver_com_proxy(proxy_str):
-    chrome_options = Options()
-    chrome_options.add_argument("--headless=new")
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("--disable-gpu")
-    chrome_options.add_argument("--window-size=1920,1080")
-    chrome_options.add_argument(
-        "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    )
-
-    # Configuração do Proxy no Chrome
-    if proxy_str:
-        chrome_options.add_argument(f"--proxy-server={proxy_str}")
-
-    # Localização do binário do Chromium no Streamlit Cloud (Linux)
-    for path in ["/usr/bin/chromium", "/usr/bin/chromium-browser", "/usr/bin/google-chrome"]:
-        if os.path.exists(path):
-            chrome_options.binary_location = path
-            break
-
-    try:
-        service = Service(ChromeDriverManager().install())
-        driver = webdriver.Chrome(service=service, options=chrome_options)
-    except Exception:
-        driver = webdriver.Chrome(options=chrome_options)
-        
-    return driver
-
-# --- PROCESSAMENTO DOS 100% DOS DADOS ---
-if uploaded_file and st.button("🚀 Iniciar Validação Online (100% da Planilha)", type="primary"):
-    if not email or not senha:
-        st.warning("Por favor, preencha o **E-mail** e a **Senha** do Trustvox.")
+if not arquivo_enviado or not slug_empresa:
+    st.info("👈 **Para começar:** Informe o slug da empresa, configure o proxy e suba a planilha na barra lateral.")
+else:
+    if arquivo_enviado.name.endswith('.csv'):
+        df_input = pd.read_csv(arquivo_enviado)
     else:
-        st.info("Iniciando navegador no servidor da nuvem via Proxy...")
-        driver = None
-        
-        try:
-            proxy_config = proxy_server.strip() if usar_proxy else None
-            driver = criar_driver_com_proxy(proxy_config)
-            wait = WebDriverWait(driver, 15)
-            
-            # Step 1: Login via Proxy
-            st.text("1/3: Acessando Trustvox via Proxy...")
-            login_url = f"https://app.trustvox.com.br/empresas/{slug_empresa}/produtos"
-            driver.get(login_url)
-            time.sleep(3)
-            
-            if "auth/login" in driver.current_url or len(driver.find_elements(By.NAME, "email")) > 0:
-                st.text("Efetuando autenticação...")
-                campo_email = wait.until(EC.presence_of_element_located((By.NAME, "email")))
-                campo_senha = driver.find_element(By.NAME, "password")
-                
-                campo_email.clear()
-                campo_email.send_keys(email)
-                campo_senha.clear()
-                campo_senha.send_keys(senha)
-                
-                btn_entrar = driver.find_element(By.XPATH, "//button[@type='submit' or contains(text(), 'Entrar')]")
-                btn_entrar.click()
-                time.sleep(5)
-            
-            if "auth/login" in driver.current_url:
-                st.error("❌ O Cloudflare/Trustvox bloqueou a conexão mesmo com o Proxy informado. Verifique o status/IP do servidor de Proxy.")
-                st.stop()
-            else:
-                st.success("🎉 Autenticação realizada com sucesso via Proxy!")
-                
-            # Step 2: Validação de 100% da Planilha
-            st.text("2/3: Validando 100% dos produtos...")
-            resultados = []
-            progresso = st.progress(0)
-            status_text = st.empty()
-            total = len(df)
-            
-            for idx, row in df.iterrows():
-                cod_antigo = str(row[col_de]).strip()
-                cod_novo = str(row[col_para]).strip()
-                
-                status_text.text(f"Validando item {idx + 1} de {total}: Código Novo '{cod_novo}'...")
-                
-                try:
-                    prod_url = f"https://app.trustvox.com.br/empresas/{slug_empresa}/produtos?search={cod_novo}"
-                    driver.get(prod_url)
-                    time.sleep(1.5)
-                    
-                    page_source = driver.page_source
-                    encontrado = cod_novo in page_source
-                    
-                    resultados.append({
-                        "Linha": idx + 1,
-                        "Código Antigo (De)": cod_antigo,
-                        "Código Novo (Para)": cod_novo,
-                        "Status Validação": "✅ Ativo / Encontrado" if encontrado else "⚠️ Não Localizado",
-                        "Detalhes": "Encontrado no catálogo Trustvox" if encontrado else "ID não retornou resultados na busca"
-                    })
-                except Exception as err_item:
-                    resultados.append({
-                        "Linha": idx + 1,
-                        "Código Antigo (De)": cod_antigo,
-                        "Código Novo (Para)": cod_novo,
-                        "Status Validação": "Erro de Leitura",
-                        "Detalhes": f"Falha na busca: {str(err_item)}"
-                    })
-                
-                progresso.progress((idx + 1) / total)
-                
-            status_text.text("3/3: ✅ Validação de 100% da planilha concluída!")
-            
-            # Step 3: Resultados e Download
-            df_resultado = pd.DataFrame(resultados)
-            st.subheader("📊 Relatório Final da Planilha Validada")
-            st.dataframe(df_resultado, use_container_width=True)
-            
-            output_name = "relatorio_validacao_online_proxy.xlsx"
-            df_resultado.to_excel(output_name, index=False)
-            
-            with open(output_name, "rb") as file:
-                st.download_button(
-                    label="📥 Baixar Relatório Completo em Excel",
-                    data=file,
-                    file_name=output_name,
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
+        df_input = pd.read_excel(arquivo_enviado)
 
-        except Exception as e:
-            st.error(f"⚠️ Erro durante a execução online via Proxy: {e}")
-        finally:
-            if driver:
-                driver.quit()
+    cols_lista = list(df_input.columns)
+    
+    # Mapeamento para tentar encontrar automaticamente as colunas de CÓDIGO (ignorando nomes)
+    col_antigo_default = next((c for c in cols_lista if any(k in str(c).lower() for k in ['cod', 'código', 'codigo', 'id_antigo'])), cols_lista[0])
+    col_novo_default = next((c for c in cols_lista if any(k in str(c).lower() for k in ['novo', 'para', 'id_novo'])), cols_lista[1] if len(cols_lista) > 1 else cols_lista[0])
+
+    col1_sel, col2_sel = st.columns(2)
+    with col1_sel:
+        col_antigo = st.selectbox("Selecione a coluna do CÓDIGO ANTIGO (IDs):", cols_lista, index=cols_lista.index(col_antigo_default))
+    with col2_sel:
+        col_novo = st.selectbox("Selecione a coluna do CÓDIGO NOVO (IDs):", cols_lista, index=cols_lista.index(col_novo_default))
+
+    btn_iniciar = st.button("🚀 Iniciar Processamento Online", type="primary", use_container_width=True)
+    
+    status_box = st.empty()
+    progress_bar = st.progress(0)
+    log_box = st.container(height=300)
+
+    # --- LÓGICA DE AUTOMATION VIA PLAYWRIGHT + PROXY ---
+    async def rodar_validacao_online():
+        df_input['Status Validação'] = 'Não Testado'
+        df_input['Observação'] = '-'
+
+        total_rows = len(df_input)
+        aprovados_count = 0
+        reprovados_count = 0
+
+        url_loja = f"https://app.trustvox.com.br/{slug_empresa}/products"
+
+        async with async_playwright() as p:
+            # Configuração das opções de inicialização do navegador
+            launch_args = {
+                "headless": True, # Headless obrigatório no Streamlit Cloud
+                "args": ["--no-sandbox", "--disable-setuid-sandbox"]
+            }
+
+            # Injeção das credenciais do Proxy se ativado
+            if usar_proxy and proxy_ip_porta:
+                launch_args["proxy"] = {
+                    "server": f"http://{proxy_ip_porta.strip()}",
+                    "username": proxy_user.strip(),
+                    "password": proxy_pass.strip()
+                }
+
+            browser = await p.chromium.launch(**launch_args)
+            context = await browser.new_context()
+            page = await context.new_page()
+
+            status_box.info(f"🌐 Conectando à Trustvox via Proxy ({proxy_ip_porta})...")
+            
+            try:
+                await page.goto(url_loja, wait_until="domcontentloaded", timeout=30000)
+                await page.wait_for_timeout(2000)
+            except Exception as e:
+                status_box.error(f"Erro ao acessar Trustvox via Proxy: {e}")
+                await browser.close()
+                return df_input
+
+            # Loop por 100% dos itens da planilha
+            for idx in range(total_rows):
+                val_antigo = str(df_input.at[idx, col_antigo]).strip()
+                val_novo = str(df_input.at[idx, col_novo]).strip()
+                linha_excel = idx + 2
+
+                status_val = "REPROVADO"
+                obs = ""
+
+                try:
+                    await page.goto(url_loja, wait_until="domcontentloaded")
+                    await page.wait_for_timeout(1000)
+
+                    # 1. Clicar em Filtrar
+                    btn_filtrar = page.locator("button:has-text('Filtrar')").first
+                    await btn_filtrar.click(timeout=6000)
+
+                    # 2. Clicar em Código do Produto
+                    opcao_codigo = page.locator("text=Código do Produto").first
+                    await opcao_codigo.click(timeout=6000)
+
+                    # 3. Preencher a caixa de texto
+                    input_popup = page.locator("div[class*='popover'] input, div[class*='filter'] input").first
+                    await input_popup.fill(val_antigo)
+
+                    # 4. Confirmar Busca
+                    btn_confirmar = page.locator("button:has-text('Confirmar')").first
+                    await btn_confirmar.click(timeout=6000)
+                    await page.wait_for_timeout(2000)
+
+                    # 5. Avaliar Tabela de Resultados
+                    page_content = await page.content()
+                    if val_antigo in page_content or val_novo in page_content:
+                        status_val = "APROVADO"
+                        obs = "Código localizado na tabela do Trustvox"
+                    else:
+                        obs = f"Código {val_antigo} não retornou resultados na busca"
+
+                except Exception as err:
+                    obs = f"Falha ao processar item: {str(err)}"
+
+                if status_val == "APROVADO":
+                    aprovados_count += 1
+                    log_box.success(f"Linha {linha_excel} | ID {val_antigo} ➔ {val_novo} | ✅ APROVADO")
+                else:
+                    reprovados_count += 1
+                    log_box.error(f"Linha {linha_excel} | ID {val_antigo} ➔ {val_novo} | ❌ REPROVADO ({obs})")
+
+                df_input.at[idx, 'Status Validação'] = status_val
+                df_input.at[idx, 'Observação'] = obs
+
+                progress_bar.progress((idx + 1) / total_rows)
+
+            await browser.close()
+            return df_input
+
+    if btn_iniciar:
+        with st.spinner("Executando validação via Playwright com Proxy..."):
+            df_final = asyncio.run(rodar_validacao_online())
+            status_box.success("🎉 Validação concluída!")
+
+            nome_saida = f"relatorio_{slug_empresa}_online.xlsx"
+            df_final.to_excel(nome_saida, index=False)
+
+            st.dataframe(df_final[['Status Validação', col_antigo, col_novo, 'Observação']], use_container_width=True)
+
+            with open(nome_saida, "rb") as file:
+                st.download_button(
+                    label="📥 Baixar Relatório Consolidado (Excel)",
+                    data=file,
+                    file_name=nome_saida,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )

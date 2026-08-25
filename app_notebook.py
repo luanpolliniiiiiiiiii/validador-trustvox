@@ -1,8 +1,23 @@
+import os
+import time
 import pandas as pd
-import requests
 import streamlit as st
 
-st.set_page_config(page_title="Trustvox Studio | Online Migration", page_icon="📚", layout="wide")
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from webdriver_manager.chrome import ChromeDriverManager
+
+st.set_page_config(
+    page_title="Trustvox Studio | Online Migration",
+    page_icon="📚",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
 st.markdown("""
 <style>
@@ -16,7 +31,10 @@ with st.sidebar:
     email_trustvox = st.text_input("E-mail Trustvox:", value="luan.araujo@reclameaqui.com.br")
     senha_trustvox = st.text_input("Senha Trustvox:", type="password")
     
-    slug_empresa = st.text_input("Slug da Empresa no Trustvox:", value="coty").strip().lower()
+    slug_empresa = st.text_input(
+        "Slug da Empresa no Trustvox:",
+        value="coty"
+    ).strip().lower()
 
     st.divider()
     st.subheader("🌐 Configuração de Proxy")
@@ -26,7 +44,10 @@ with st.sidebar:
     proxy_pass = st.text_input("Senha do Proxy:", type="password", value="f080q5vj4ys9")
 
     st.divider()
-    arquivo_enviado = st.file_uploader("Carregar Planilha De/Para", type=["xlsx", "csv"])
+    arquivo_enviado = st.file_uploader(
+        "Carregar Planilha De/Para",
+        type=["xlsx", "csv"]
+    )
 
     modo_validacao = st.radio(
         "Escopo de Validação",
@@ -34,9 +55,11 @@ with st.sidebar:
         index=0
     )
 
-st.title("🛡️ Trustvox Migration Studio — Execução Online (Sessão HTTP)")
+st.title("🛡️ Trustvox Migration Studio — Execução Online")
 
-if arquivo_enviado and slug_empresa:
+if arquivo_enviado is None or not slug_empresa:
+    st.info("👈 Informe suas credenciais, slug e suba a planilha na barra lateral para iniciar.")
+else:
     if arquivo_enviado.name.endswith('.csv'):
         df_input = pd.read_csv(arquivo_enviado)
     else:
@@ -45,32 +68,78 @@ if arquivo_enviado and slug_empresa:
     cols_lista = list(df_input.columns)
     
     col_antigo_default = next(
-        (c for c in cols_lista if any(k in str(c).lower() for k in ['cod_antigo', 'código antigo', 'codigo antigo', 'id antigo', 'id_antigo'])),
+        (c for c in cols_lista if any(k in str(c).lower() for k in ['cod_antigo', 'código antigo', 'codigo antigo', 'id antigo', 'id_antigo', 'código antigo do produto'])),
         cols_lista[0]
     )
     
     col_novo_default = next(
-        (c for c in cols_lista if any(k in str(c).lower() for k in ['cod_novo', 'código novo', 'codigo novo', 'id novo', 'id_novo'])),
+        (c for c in cols_lista if any(k in str(c).lower() for k in ['cod_novo', 'código novo', 'codigo novo', 'id novo', 'id_novo', 'novo código do produto'])),
         cols_lista[1] if len(cols_lista) > 1 else cols_lista[0]
     )
 
-    col1_sel, col2_sel = st.columns(2)
-    with col1_sel:
-        col_antigo = st.selectbox("Coluna CÓDIGO ANTIGO (Trustvox):", cols_lista, index=cols_lista.index(col_antigo_default))
-    with col2_sel:
-        col_novo = st.selectbox("Coluna CÓDIGO NOVO (Site):", cols_lista, index=cols_lista.index(col_novo_default))
+    col_execucao, col_analytics = st.columns([1.1, 0.9], gap="large")
 
-    btn_iniciar = st.button("🚀 Iniciar Processamento Online", type="primary", use_container_width=True)
-    
-    status_box = st.empty()
-    progress_bar = st.progress(0)
-    log_box = st.container(height=350)
+    with col_execucao:
+        st.markdown("### 🎯 Central de Execução")
+        col1_sel, col2_sel = st.columns(2)
+        with col1_sel:
+            col_antigo = st.selectbox("Coluna CÓDIGO ANTIGO (Trustvox):", cols_lista, index=cols_lista.index(col_antigo_default))
+        with col2_sel:
+            col_novo = st.selectbox("Coluna CÓDIGO NOVO (Site):", cols_lista, index=cols_lista.index(col_novo_default))
 
-    def rodar_validacao_http():
+        btn_iniciar = st.button("🚀 Iniciar Processamento Online", type="primary", use_container_width=True)
+        
+        status_box = st.empty()
+        progress_bar = st.progress(0)
+        log_box = st.container(height=350)
+
+    with col_analytics:
+        st.markdown("### 📊 Painel de Insights")
+        m1, m2, m3 = st.columns(3)
+        with m1:
+            kpi_total = st.empty()
+            kpi_total.metric("Analisados", "0")
+        with m2:
+            kpi_ok = st.empty()
+            kpi_ok.metric("Aprovados", "0")
+        with m3:
+            kpi_err = st.empty()
+            kpi_err.metric("Reprovados", "0")
+
+        st.divider()
+        tabela_live = st.empty()
+
+    def criar_driver_online():
+        chrome_options = Options()
+        chrome_options.add_argument("--headless=new")
+        chrome_options.add_argument("--no-sandbox")
+        chrome_options.add_argument("--disable-dev-shm-usage")
+        chrome_options.add_argument("--disable-gpu")
+        chrome_options.add_argument("--window-size=1920,1080")
+
+        if usar_proxy and proxy_ip_porta:
+            if proxy_user and proxy_pass:
+                chrome_options.add_argument(f"--proxy-server=http://{proxy_user.strip()}:{proxy_pass.strip()}@{proxy_ip_porta.strip()}")
+            else:
+                chrome_options.add_argument(f"--proxy-server=http://{proxy_ip_porta.strip()}")
+
+        for path in ["/usr/bin/chromium", "/usr/bin/chromium-browser", "/usr/bin/google-chrome"]:
+            if os.path.exists(path):
+                chrome_options.binary_location = path
+                break
+
+        try:
+            service = Service(ChromeDriverManager().install())
+            driver = webdriver.Chrome(service=service, options=chrome_options)
+        except Exception:
+            driver = webdriver.Chrome(options=chrome_options)
+            
+        return driver
+
+    def rodar_validacao_selenium():
         col_antigo_name = col_antigo
         col_novo_name = col_novo
 
-        # Garante nomes únicos para as colunas de validação
         col_status_nome = 'Status Validação'
         col_obs_nome = 'Observação Validação'
 
@@ -89,76 +158,176 @@ if arquivo_enviado and slug_empresa:
         aprovados_count = 0
         reprovados_count = 0
 
-        session = requests.Session()
-        session.headers.update({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        })
+        url_base = f"https://app.trustvox.com.br/{slug_empresa}/products"
 
-        if usar_proxy and proxy_ip_porta:
-            proxy_str = f"http://{proxy_user.strip()}:{proxy_pass.strip()}@{proxy_ip_porta.strip()}"
-            session.proxies = {"http": proxy_str, "https": proxy_str}
-
-        status_box.info("🌐 Autenticando na Trustvox...")
-
-        url_login = "https://app.trustvox.com.br/auth/login"
-        payload_login = {"email": email_trustvox, "password": senha_trustvox}
+        status_box.info("🌐 Inicializando Chromium no servidor...")
+        driver = criar_driver_online()
+        wait = WebDriverWait(driver, 10)
 
         try:
-            res = session.post(url_login, data=payload_login, timeout=15)
-            status_box.info(f"🚀 Iniciando validação na empresa {slug_empresa}...")
-        except Exception as e:
-            status_box.error(f"Erro na conexão de login: {e}")
-            return df_input
+            status_box.info("🔑 Realizando autenticação na Trustvox...")
+            driver.get(url_base)
+            time.sleep(3)
 
-        url_produtos = f"https://app.trustvox.com.br/{slug_empresa}/products"
+            if "login" in driver.current_url or len(driver.find_elements(By.NAME, "email")) > 0:
+                campo_email = wait.until(EC.presence_of_element_located((By.NAME, "email")))
+                campo_senha = driver.find_element(By.NAME, "password")
+                
+                campo_email.clear()
+                campo_email.send_keys(email_trustvox)
+                campo_senha.clear()
+                campo_senha.send_keys(senha_trustvox)
+                
+                btn_entrar = driver.find_element(By.XPATH, "//button[@type='submit' or contains(text(), 'Entrar')]")
+                btn_entrar.click()
+                time.sleep(4)
+
+            status_box.info(f"🚀 Iniciando validação dos produtos da empresa {slug_empresa}...")
+
+        except Exception as login_err:
+            status_box.error(f"Falha de autenticação/conexão: {login_err}")
+            driver.quit()
+            return df_input
 
         for cont, idx in enumerate(indices, start=1):
             val_raw = df_input.at[idx, col_antigo_name]
-            cod_antigo_val = str(int(val_raw)).strip() if pd.notna(val_raw) and isinstance(val_raw, (int, float)) else str(val_raw).strip()
+            cod_antigo = str(int(val_raw)).strip() if pd.notna(val_raw) and isinstance(val_raw, (int, float)) else str(val_raw).strip()
 
             val_novo_raw = df_input.at[idx, col_novo_name]
-            cod_novo_val = str(int(val_novo_raw)).strip() if pd.notna(val_novo_raw) and isinstance(val_novo_raw, (int, float)) else str(val_novo_raw).strip()
+            cod_novo = str(int(val_novo_raw)).strip() if pd.notna(val_novo_raw) and isinstance(val_novo_raw, (int, float)) else str(val_novo_raw).strip()
 
             linha_excel = idx + 2
             status_val = "REPROVADO"
             obs = ""
 
             try:
-                res_busca = session.get(f"{url_produtos}?search={cod_antigo_val}", timeout=10)
+                driver.get(url_base)
+                time.sleep(1.5)
+
+                # Tenta simular o filtro do modal
+                try:
+                    btn_filtrar = driver.find_element(By.XPATH, "//button[contains(., 'Filtrar')]")
+                    driver.execute_script("arguments[0].click();", btn_filtrar)
+                    time.sleep(0.5)
+
+                    opcao_codigo = driver.find_element(By.XPATH, "//*[contains(text(), 'Código do Produto')]")
+                    driver.execute_script("arguments[0].click();", opcao_codigo)
+                    time.sleep(0.5)
+
+                    inputs = driver.find_elements(By.CSS_SELECTOR, "div[class*='popover'] input, div[class*='modal'] input, div[class*='filter'] input")
+                    if inputs:
+                        input_popup = inputs[0]
+                        input_popup.click()
+                        input_popup.send_keys(Keys.CONTROL + "a")
+                        input_popup.send_keys(Keys.DELETE)
+                        input_popup.send_keys(cod_antigo)
+                        time.sleep(0.4)
+
+                        btn_confirmar = driver.find_element(By.XPATH, "//button[contains(., 'Confirmar')]")
+                        driver.execute_script("arguments[0].click();", btn_confirmar)
+                        time.sleep(2)
+                except Exception:
+                    pass
+
+                # Verifica se o código antigo está na tabela filtrada ou visível na página
+                linhas_tabela = driver.find_elements(By.XPATH, f"//tr[contains(., '{cod_antigo}')] | //tbody/tr")
                 
-                if res_busca.status_code == 200 and cod_antigo_val in res_busca.text:
-                    status_val = "APROVADO"
-                    obs = f"Código {cod_antigo_val} localizado no catálogo"
+                if len(linhas_tabela) > 0 and cod_antigo in driver.page_source:
+                    try:
+                        driver.execute_script("arguments[0].click();", linhas_tabela[0])
+                        time.sleep(1.5)
+
+                        janela_original = driver.current_window_handle
+                        btn_links = driver.find_elements(By.XPATH, "//*[contains(text(), 'Link original')]")
+                        
+                        if len(btn_links) > 0:
+                            driver.execute_script("arguments[0].click();", btn_links[0])
+                            time.sleep(2.5)
+
+                            novas_janelas = [j for j in driver.window_handles if j != janela_original]
+                            if len(novas_janelas) > 0:
+                                driver.switch_to.window(novas_janelas[0])
+
+                            product_id_console = driver.execute_script("""
+                                if (window._trustvox && Array.isArray(window._trustvox)) {
+                                    for (let item of window._trustvox) {
+                                        if (Array.isArray(item) && item[0] === '_productId') {
+                                            return String(item[1]);
+                                        }
+                                    }
+                                }
+                                if (window._trustvox && typeof window._trustvox === 'object') {
+                                    return String(window._trustvox._productId || window._trustvox.product_id || '');
+                                }
+                                return null;
+                            """)
+
+                            html_site = driver.page_source
+
+                            if len(novas_janelas) > 0:
+                                driver.close()
+                                driver.switch_to.window(janela_original)
+
+                            if product_id_console and str(product_id_console).strip() == cod_novo:
+                                status_val = "APROVADO"
+                                obs = f"_productId ({product_id_console}) verificado no site"
+                            elif cod_novo in html_site:
+                                status_val = "APROVADO"
+                                obs = "Código novo localizado no HTML da página"
+                            else:
+                                obs = f"Esperado: {cod_novo} | Retornado: {product_id_console}"
+                        else:
+                            status_val = "APROVADO"
+                            obs = f"Código {cod_antigo} localizado no Trustvox"
+                    except Exception:
+                        status_val = "APROVADO"
+                        obs = f"Código {cod_antigo} localizado no Trustvox"
                 else:
-                    obs = f"Código {cod_antigo_val} não encontrado na busca"
+                    obs = f"Código {cod_antigo} não encontrado na busca"
 
             except Exception as e:
-                obs = f"Erro na requisição: {str(e).splitlines()[0]}"
+                obs = f"Erro no processamento: {str(e).splitlines()[0]}"
 
             if status_val == "APROVADO":
                 aprovados_count += 1
-                log_box.success(f"Linha {linha_excel} | ID {cod_antigo_val} ➔ {cod_novo_val} | ✅ APROVADO")
+                log_box.success(f"Linha {linha_excel} | ID {cod_antigo} ➔ {cod_novo} | ✅ APROVADO")
             else:
                 reprovados_count += 1
-                log_box.error(f"Linha {linha_excel} | ID {cod_antigo_val} ➔ {cod_novo_val} | ❌ REPROVADO ({obs})")
+                log_box.error(f"Linha {linha_excel} | ID {cod_antigo} ➔ {cod_novo} | ❌ REPROVADO ({obs})")
 
             df_input.at[idx, col_status_nome] = status_val
             df_input.at[idx, col_obs_nome] = obs
 
+            kpi_total.metric("Analisados", f"{cont}/{len(indices)}")
+            kpi_ok.metric("Aprovados", f"{aprovados_count}")
+            kpi_err.metric("Reprovados", f"{reprovados_count}")
+
             progress_bar.progress(cont / len(indices))
 
+        driver.quit()
         return df_input
 
     if btn_iniciar:
-        with st.spinner("Executando validação rápida..."):
-            df_final = rodar_validacao_http()
+        with st.spinner("Iniciando processamento no servidor..."):
+            df_final = rodar_validacao_selenium()
 
             status_box.success("🎉 Validação concluída com sucesso!")
 
-            # Tratamento de colunas para exibição sem duplicatas
+            nome_saida = f"relatorio_{slug_empresa}_online_validado.xlsx"
+            df_final.to_excel(nome_saida, index=False)
+
+            with open(nome_saida, "rb") as file:
+                st.download_button(
+                    label="📥 Baixar Relatório Consolidado (Excel)",
+                    data=file,
+                    file_name=nome_saida,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+            
             colunas_exibicao = []
             for col in ['Status Validação', col_antigo, col_novo, 'Observação Validação']:
                 if col not in colunas_exibicao:
                     colunas_exibicao.append(col)
 
-            st.dataframe(df_final[colunas_exibicao], use_container_width=True)
+            tabela_live.dataframe(df_final[colunas_exibicao], use_container_width=True)

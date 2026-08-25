@@ -1,16 +1,8 @@
 import os
-import sys
 import time
 import pandas as pd
 import streamlit as st
-
-try:
-    from playwright.sync_api import sync_playwright
-except ImportError:
-    import subprocess
-    subprocess.run([sys.executable, "-m", "pip", "install", "playwright"])
-    subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"])
-    from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright
 
 st.set_page_config(
     page_title="Trustvox Studio | Online Migration",
@@ -152,7 +144,7 @@ else:
                 ]
             }
 
-            status_box.info(f"🌐 Inicializando navegador com Proxy ({proxy_ip_porta})...")
+            status_box.info(f"🌐 Inicializando Chromium via Proxy ({proxy_ip_porta})...")
             browser = p.chromium.launch(**launch_args)
 
             context_kwargs = {}
@@ -167,7 +159,7 @@ else:
             page = context.new_page()
 
             try:
-                # 1. Login (Conforme vídeo)
+                # 1. Login
                 status_box.info(f"🔑 Realizando login como {email_trustvox}...")
                 page.goto(url_login, wait_until="domcontentloaded", timeout=35000)
                 page.wait_for_timeout(2000)
@@ -202,7 +194,7 @@ else:
                 browser.close()
                 return df_input
 
-            # Loop de validação de produtos
+            # Loop de produtos
             for cont, idx in enumerate(indices, start=1):
                 val_raw = df_input.at[idx, col_antigo_name]
                 cod_antigo = str(int(val_raw)).strip() if pd.notna(val_raw) and isinstance(val_raw, (int, float)) else str(val_raw).strip()
@@ -250,7 +242,7 @@ else:
                         linha_produto.click(timeout=8000)
                         page.wait_for_timeout(2000)
 
-                        # F. Clicar em Link original e interceptar nova aba
+                        # F. Clicar em Link original
                         with context.expect_page(timeout=12000) as new_page_info:
                             page.click("text=Link original", timeout=8000)
                         
@@ -258,7 +250,7 @@ else:
                         page_site.wait_for_load_state("domcontentloaded")
                         page_site.wait_for_timeout(2500)
 
-                        # G. Checagem do _productId no e-commerce
+                        # G. Avaliar _productId no console
                         product_id_console = page_site.evaluate("""
                             () => {
                                 if (window._trustvox && Array.isArray(window._trustvox)) {

@@ -37,13 +37,6 @@ with st.sidebar:
     ).strip().lower()
 
     st.divider()
-    st.subheader("🌐 Configuração de Conexão")
-    usar_proxy = st.checkbox("Ativar Proxy de Saída", value=False)
-    proxy_ip_porta = st.text_input("IP:Porta do Proxy:", value="64.137.96.74:6641")
-    proxy_user = st.text_input("Usuário do Proxy:", value="mxjcpfer")
-    proxy_pass = st.text_input("Senha do Proxy:", type="password", value="f080q5vj4ys9")
-
-    st.divider()
     arquivo_enviado = st.file_uploader(
         "Carregar Planilha De/Para",
         type=["xlsx", "csv"]
@@ -55,7 +48,7 @@ with st.sidebar:
         index=0
     )
 
-st.title("🛡️ Trustvox Migration Studio — Execução Online Real")
+st.title("🛡️ Trustvox Migration Studio — Execução Direct Connection")
 
 if arquivo_enviado is None or not slug_empresa:
     st.info("👈 Informe suas credenciais, slug e suba a planilha na barra lateral para iniciar.")
@@ -135,9 +128,8 @@ else:
         url_products = f"https://app.trustvox.com.br/{slug_empresa}/products"
 
         with sync_playwright() as p:
-            status_box.info("🌐 Inicializando Chromium no servidor...")
+            status_box.info("🌐 Inicializando Chromium em conexão direta...")
 
-            # O launch roda 100% limpo sem passar argumentos de proxy
             browser = p.chromium.launch(
                 headless=True,
                 timeout=30000,
@@ -149,25 +141,12 @@ else:
                 ]
             )
 
-            context_kwargs = {
-                "viewport": {"width": 1920, "height": 1080},
-                "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            }
-
-            # Aplica o Proxy no Contexto apenas se a caixinha estiver marcada
-            if usar_proxy and proxy_ip_porta:
-                context_kwargs["proxy"] = {
-                    "server": f"http://{proxy_ip_porta.strip()}",
-                    "username": proxy_user.strip(),
-                    "password": proxy_pass.strip()
-                }
-
-            context = browser.new_context(**context_kwargs)
+            context = browser.new_context(
+                viewport={"width": 1920, "height": 1080},
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            )
             page = context.new_page()
 
-            # -------------------------------------------------------------
-            # ETAPA DE LOGIN REAL (Conforme gravado no vídeo)
-            # -------------------------------------------------------------
             try:
                 status_box.info(f"🔑 Carregando formulário de login e digitando {email_trustvox}...")
                 page.goto(url_login, wait_until="domcontentloaded", timeout=40000)
@@ -182,7 +161,6 @@ else:
                 page.click("button[type='submit']")
                 page.wait_for_timeout(5000)
 
-                # Transição no company-selection se necessário (Vídeo 0:16 - 0:21)
                 if "company-selection" in page.url or "company_selection" in page.url or page.locator("input[placeholder*='empresa']").is_visible():
                     status_box.info(f"🏢 Selecionando a empresa '{slug_empresa}'...")
                     inp_company = page.locator("input[placeholder*='empresa'], input[type='text']").first
@@ -202,9 +180,6 @@ else:
                 browser.close()
                 return df_input
 
-            # -------------------------------------------------------------
-            # LOOP DE VALIDAÇÃO DOS PRODUTOS
-            # -------------------------------------------------------------
             for cont, idx in enumerate(indices, start=1):
                 val_raw = df_input.at[idx, col_antigo_name]
                 cod_antigo = str(int(val_raw)).strip() if pd.notna(val_raw) and isinstance(val_raw, (int, float)) else str(val_raw).strip()
@@ -221,17 +196,14 @@ else:
                         page.goto(url_products, wait_until="domcontentloaded")
                         page.wait_for_timeout(1500)
 
-                    # 1. Clicar em Filtrar (Vídeo 0:31)
                     btn_filtrar = page.locator("button:has-text('Filtrar')").first
                     btn_filtrar.click(timeout=8000)
                     page.wait_for_timeout(800)
 
-                    # 2. Clicar em Código do Produto (Vídeo 0:33)
                     opcao_codigo = page.locator("text=Código do Produto").first
                     opcao_codigo.click(timeout=8000)
                     page.wait_for_timeout(800)
 
-                    # 3. Preencher caixa flutuante do modal (Vídeo 0:34 - 0:37)
                     input_popup = page.locator("div[class*='popover'] input, div[class*='modal'] input, div[class*='filter'] input").first
                     if not input_popup.is_visible():
                         input_popup = page.locator("input").filter(has_not=page.locator("header input")).last
@@ -240,19 +212,16 @@ else:
                     input_popup.fill(cod_antigo)
                     page.wait_for_timeout(600)
 
-                    # 4. Clicar em Confirmar (Vídeo 0:38)
                     btn_confirmar = page.locator("button:has-text('Confirmar')").first
                     btn_confirmar.click(timeout=5000)
                     page.wait_for_timeout(2500)
 
-                    # 5. Clicar no produto da tabela (Vídeo 0:41 - 0:43)
                     linha_produto = page.locator(f"tr:has-text('{cod_antigo}'), tbody tr").first
 
                     if linha_produto.is_visible():
                         linha_produto.click(timeout=8000)
                         page.wait_for_timeout(2000)
 
-                        # 6. Clicar em 'Link original' e ler nova aba (Vídeo 0:46 - 0:52)
                         with context.expect_page(timeout=12000) as new_page_info:
                             page.click("text=Link original", timeout=8000)
                         
@@ -260,7 +229,6 @@ else:
                         page_site.wait_for_load_state("domcontentloaded")
                         page_site.wait_for_timeout(2500)
 
-                        # 7. Ler _productId no console JS (Vídeo 0:53 - 1:05)
                         product_id_console = page_site.evaluate("""
                             () => {
                                 if (window._trustvox && Array.isArray(window._trustvox)) {

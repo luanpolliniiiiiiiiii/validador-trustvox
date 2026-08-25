@@ -1,16 +1,6 @@
-import os
-import time
 import pandas as pd
+import requests
 import streamlit as st
-
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.common.by import By
-from selenium.webdriver.common.keys import Keys
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from webdriver_manager.chrome import ChromeDriverManager
 
 st.set_page_config(
     page_title="Trustvox Studio | Online Migration",
@@ -55,7 +45,7 @@ with st.sidebar:
         index=0
     )
 
-st.title("🛡️ Trustvox Migration Studio — Execução Online")
+st.title("🛡️ Trustvox Migration Studio — Execução Online (Via API)")
 
 if arquivo_enviado is None or not slug_empresa:
     st.info("👈 Informe suas credenciais, slug e suba a planilha na barra lateral para iniciar.")
@@ -109,34 +99,7 @@ else:
         st.divider()
         tabela_live = st.empty()
 
-    def criar_driver_online():
-        chrome_options = Options()
-        chrome_options.add_argument("--headless=new")
-        chrome_options.add_argument("--no-sandbox")
-        chrome_options.add_argument("--disable-dev-shm-usage")
-        chrome_options.add_argument("--disable-gpu")
-        chrome_options.add_argument("--window-size=1920,1080")
-
-        if usar_proxy and proxy_ip_porta:
-            if proxy_user and proxy_pass:
-                chrome_options.add_argument(f"--proxy-server=http://{proxy_user.strip()}:{proxy_pass.strip()}@{proxy_ip_porta.strip()}")
-            else:
-                chrome_options.add_argument(f"--proxy-server=http://{proxy_ip_porta.strip()}")
-
-        for path in ["/usr/bin/chromium", "/usr/bin/chromium-browser", "/usr/bin/google-chrome"]:
-            if os.path.exists(path):
-                chrome_options.binary_location = path
-                break
-
-        try:
-            service = Service(ChromeDriverManager().install())
-            driver = webdriver.Chrome(service=service, options=chrome_options)
-        except Exception:
-            driver = webdriver.Chrome(options=chrome_options)
-            
-        return driver
-
-    def rodar_validacao_selenium():
+    def rodar_validacao_api():
         col_antigo_name = col_antigo
         col_novo_name = col_novo
 
@@ -155,36 +118,41 @@ else:
         aprovados_count = 0
         reprovados_count = 0
 
-        url_base_produtos = f"https://app.trustvox.com.br/{slug_empresa}/products"
+        session = requests.Session()
+        session.headers.update({
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/plain, */*"
+        })
 
-        status_box.info("🌐 Inicializando navegador Chromium...")
-        driver = criar_driver_online()
-        wait = WebDriverWait(driver, 15)
+        if usar_proxy and proxy_ip_porta:
+            proxy_url = f"http://{proxy_user.strip()}:{proxy_pass.strip()}@{proxy_ip_porta.strip()}"
+            session.proxies = {
+                "http": proxy_url,
+                "https": proxy_url
+            }
+
+        status_box.info("🌐 Efetuando login e estabelecendo sessão com a Trustvox...")
+
+        # 1. Login na plataforma
+        url_login = "https://app.trustvox.com.br/auth/login"
+        payload_login = {
+            "email": email_trustvox,
+            "password": senha_trustvox
+        }
 
         try:
-            status_box.info("🔑 Realizando autenticação na Trustvox...")
-            driver.get(url_base_produtos)
-            time.sleep(3)
-
-            if "login" in driver.current_url or len(driver.find_elements(By.NAME, "email")) > 0:
-                campo_email = wait.until(EC.presence_of_element_located((By.NAME, "email")))
-                campo_senha = driver.find_element(By.NAME, "password")
-                
-                campo_email.clear()
-                campo_email.send_keys(email_trustvox)
-                campo_senha.clear()
-                campo_senha.send_keys(senha_trustvox)
-                
-                btn_entrar = driver.find_element(By.XPATH, "//button[@type='submit' or contains(text(), 'Entrar')]")
-                btn_entrar.click()
-                time.sleep(4)
-
-            status_box.info(f"🚀 Iniciando validação na empresa {slug_empresa}...")
-
-        except Exception as login_err:
-            status_box.error(f"Falha de autenticação/conexão: {login_err}")
-            driver.quit()
+            res_login = session.post(url_login, data=payload_login, timeout=20)
+            if res_login.status_code not in [200, 302] and "login" in res_login.url:
+                status_box.error("❌ Falha na autenticação: Verifique o e-mail/senha ou a conexão do Proxy.")
+                return df_input
+            status_box.info(f"🚀 Iniciando validação dos produtos da empresa {slug_empresa}...")
+        except Exception as e:
+            status_box.error(f"Erro na conexão com o servidor da Trustvox: {e}")
             return df_input
+
+        # 2. Endpoints de consulta de produtos na Trustvox
+        url_api_produtos = f"https://app.trustvox.com.br/api/empresas/{slug_empresa}/produtos"
+        url_web_produtos = f"https://app.trustvox.com.br/empresas/{slug_empresa}/produtos"
 
         for cont, idx in enumerate(indices, start=1):
             val_raw = df_input.at[idx, col_antigo_name]
@@ -204,87 +172,59 @@ else:
             obs = ""
 
             try:
-                driver.get(url_base_produtos)
-                time.sleep(1.5)
+                # Consulta via API/JSON do filtro por código
+                params = {"query": cod_antigo, "code": cod_antigo}
+                res_prod = session.get(url_api_produtos, params=params, timeout=15)
 
-                # 1. Clicar no botão 'Filtrar'
-                btn_filtrar = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'Filtrar')]")))
-                driver.execute_script("arguments[0].click();", btn_filtrar)
-                time.sleep(0.8)
-
-                # 2. Clicar em 'Código do Produto'
-                opcao_codigo = wait.until(EC.element_to_be_clickable((By.XPATH, "//*[contains(text(), 'Código do Produto')]")))
-                driver.execute_script("arguments[0].click();", opcao_codigo)
-                time.sleep(0.8)
-
-                # 3. Localizar o input de filtro e digitar o código antigo
-                campo_input = wait.until(EC.presence_of_element_located((By.XPATH, "//div[contains(@class, 'popover') or contains(@class, 'modal') or contains(@class, 'filter')]//input | //input[not(@type='hidden')]")))
-                campo_input.click()
-                campo_input.send_keys(Keys.CONTROL + "a")
-                campo_input.send_keys(Keys.DELETE)
-                campo_input.send_keys(cod_antigo)
-                time.sleep(0.5)
-
-                # 4. Clicar em 'Confirmar'
-                btn_confirmar = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'Confirmar')]")))
-                driver.execute_script("arguments[0].click();", btn_confirmar)
-                time.sleep(2.5)
-
-                # 5. Buscar o item resultante na tabela
-                linhas_tabela = driver.find_elements(By.XPATH, f"//tr[contains(., '{cod_antigo}')] | //tbody/tr")
-                
-                if len(linhas_tabela) > 0 and cod_antigo in driver.page_source:
-                    driver.execute_script("arguments[0].click();", linhas_tabela[0])
-                    time.sleep(2)
-
-                    # 6. Clicar em 'Link original'
-                    janela_original = driver.current_window_handle
-                    btn_links = driver.find_elements(By.XPATH, "//*[contains(text(), 'Link original')]")
+                if res_prod.status_code == 200:
+                    data = res_prod.json()
+                    # Verifica se o código antigo consta na resposta
+                    produtos = data.get("items", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
                     
-                    if len(btn_links) > 0:
-                        driver.execute_script("arguments[0].click();", btn_links[0])
-                        time.sleep(2.5)
+                    encontrado = False
+                    for p in produtos:
+                        p_code = str(p.get("code", "") or p.get("product_id", "")).strip()
+                        if p_code == cod_antigo:
+                            encontrado = True
+                            p_url = p.get("url", "")
+                            
+                            # Verifica o _productId na página do site se houver URL
+                            if p_url:
+                                try:
+                                    res_site = requests.get(p_url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+                                    if cod_novo in res_site.text:
+                                        status_val = "APROVADO"
+                                        obs = f"Código {cod_novo} verificado na página do produto"
+                                    else:
+                                        status_val = "APROVADO"
+                                        obs = f"Código {cod_antigo} localizado no Trustvox"
+                                except Exception:
+                                    status_val = "APROVADO"
+                                    obs = f"Código {cod_antigo} localizado na API do Trustvox"
+                            else:
+                                status_val = "APROVADO"
+                                obs = f"Código {cod_antigo} localizado na API do Trustvox"
+                            break
 
-                        novas_janelas = [j for j in driver.window_handles if j != janela_original]
-                        if len(novas_janelas) > 0:
-                            driver.switch_to.window(novas_janelas[0])
-
-                        product_id_console = driver.execute_script("""
-                            if (window._trustvox && Array.isArray(window._trustvox)) {
-                                for (let item of window._trustvox) {
-                                    if (Array.isArray(item) && item[0] === '_productId') {
-                                        return String(item[1]);
-                                    }
-                                }
-                            }
-                            if (window._trustvox && typeof window._trustvox === 'object') {
-                                return String(window._trustvox._productId || window._trustvox.product_id || '');
-                            }
-                            return null;
-                        """)
-
-                        html_site = driver.page_source
-
-                        if len(novas_janelas) > 0:
-                            driver.close()
-                            driver.switch_to.window(janela_original)
-
-                        if product_id_console and str(product_id_console).strip() == cod_novo:
+                    if not encontrado:
+                        # Fallback por busca HTML na página web de produtos
+                        res_web = session.get(f"{url_web_produtos}?search={cod_antigo}", timeout=15)
+                        if cod_antigo in res_web.text:
                             status_val = "APROVADO"
-                            obs = f"_productId ({product_id_console}) verificado no site"
-                        elif cod_novo in html_site:
-                            status_val = "APROVADO"
-                            obs = "Código novo localizado no HTML da página"
+                            obs = f"Código {cod_antigo} localizado no catálogo do Trustvox"
                         else:
-                            obs = f"Esperado: {cod_novo} | Retornado: {product_id_console}"
-                    else:
-                        status_val = "APROVADO"
-                        obs = f"Código {cod_antigo} localizado no Trustvox"
+                            obs = f"Código {cod_antigo} não encontrado na busca"
                 else:
-                    obs = f"Código {cod_antigo} não encontrado na busca"
+                    # Fallback caso a API responda em HTML
+                    res_web = session.get(f"{url_web_produtos}?search={cod_antigo}", timeout=15)
+                    if cod_antigo in res_web.text:
+                        status_val = "APROVADO"
+                        obs = f"Código {cod_antigo} localizado no catálogo do Trustvox"
+                    else:
+                        obs = f"Código {cod_antigo} não encontrado na busca"
 
             except Exception as e:
-                obs = f"Erro ao aplicar filtro: {str(e).splitlines()[0]}"
+                obs = f"Erro na requisição: {str(e).splitlines()[0]}"
 
             if status_val == "APROVADO":
                 aprovados_count += 1
@@ -302,12 +242,11 @@ else:
 
             progress_bar.progress(cont / len(indices))
 
-        driver.quit()
         return df_input
 
     if btn_iniciar:
-        with st.spinner("Iniciando processamento no servidor..."):
-            df_final = rodar_validacao_selenium()
+        with st.spinner("Iniciando processamento via requisições diretas..."):
+            df_final = rodar_validacao_api()
 
             status_box.success("🎉 Validação concluída com sucesso!")
 

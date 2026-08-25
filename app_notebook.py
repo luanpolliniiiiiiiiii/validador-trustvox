@@ -1,14 +1,13 @@
 import os
 import sys
 import time
-import subprocess
 import pandas as pd
 import streamlit as st
 
-# Garante a instalação do Playwright e seus binários no ambiente da nuvem
 try:
     from playwright.sync_api import sync_playwright
 except ImportError:
+    import subprocess
     subprocess.run([sys.executable, "-m", "pip", "install", "playwright"])
     subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"])
     from playwright.sync_api import sync_playwright
@@ -47,7 +46,7 @@ with st.sidebar:
     st.divider()
     st.subheader("🌐 Configuração de Proxy")
     usar_proxy = st.checkbox("Ativar Proxy de Saída", value=True)
-    proxy_ip_porta = st.text_input("IP:Porta do Proxy:", value="31.59.20.176:6754")
+    proxy_ip_porta = st.text_input("IP:Porta do Proxy:", value="64.137.96.74:6641")
     proxy_user = st.text_input("Usuário do Proxy:", value="mxjcpfer")
     proxy_pass = st.text_input("Senha do Proxy:", type="password", value="f080q5vj4ys9")
 
@@ -145,23 +144,30 @@ else:
         with sync_playwright() as p:
             launch_args = {
                 "headless": True,
-                "args": ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
+                "args": [
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu"
+                ]
             }
 
+            status_box.info(f"🌐 Inicializando navegador com Proxy ({proxy_ip_porta})...")
+            browser = p.chromium.launch(**launch_args)
+
+            context_kwargs = {}
             if usar_proxy and proxy_ip_porta:
-                launch_args["proxy"] = {
+                context_kwargs["proxy"] = {
                     "server": f"http://{proxy_ip_porta.strip()}",
                     "username": proxy_user.strip(),
                     "password": proxy_pass.strip()
                 }
 
-            status_box.info("🌐 Inicializando navegador na nuvem...")
-            browser = p.chromium.launch(**launch_args)
-            context = browser.new_context()
+            context = browser.new_context(**context_kwargs)
             page = context.new_page()
 
             try:
-                # 1. Login (Vídeo 0:00 - 0:15)
+                # 1. Login (Conforme vídeo)
                 status_box.info(f"🔑 Realizando login como {email_trustvox}...")
                 page.goto(url_login, wait_until="domcontentloaded", timeout=35000)
                 page.wait_for_timeout(2000)
@@ -172,9 +178,9 @@ else:
                     page.click("button[type='submit']")
                     page.wait_for_timeout(4000)
 
-                # 2. Seleção de empresa no company-selection (Vídeo 0:16 - 0:21)
+                # 2. Seleção da Empresa
                 if "company-selection" in page.url or "company_selection" in page.url or page.locator("input[placeholder*='empresa']").is_visible():
-                    status_box.info(f"🏢 Buscando empresa '{slug_empresa}' na lista...")
+                    status_box.info(f"🏢 Selecionando empresa '{slug_empresa}'...")
                     try:
                         input_search = page.locator("input[placeholder*='empresa'], input[type='text']").first
                         input_search.fill(slug_empresa)
@@ -183,20 +189,20 @@ else:
                         opcao_empresa = page.locator(f"text={slug_empresa}").first
                         opcao_empresa.click()
                         page.wait_for_timeout(3000)
-                    except Exception as err_company:
-                        status_box.warning(f"Aviso de navegação: {err_company}")
+                    except Exception as err_comp:
+                        status_box.warning(f"Aviso de navegação: {err_comp}")
 
-                # 3. Navegação direta para /products (Vídeo 0:22 - 0:27)
+                # 3. Navegação para Produtos
                 status_box.info(f"🚀 Acessando {url_products}...")
                 page.goto(url_products, wait_until="domcontentloaded", timeout=30000)
                 page.wait_for_timeout(2000)
 
             except Exception as login_err:
-                status_box.error(f"❌ Falha de login/autenticação: {login_err}")
+                status_box.error(f"❌ Falha no login/Proxy: {login_err}")
                 browser.close()
                 return df_input
 
-            # Loop de validação produto a produto
+            # Loop de validação de produtos
             for cont, idx in enumerate(indices, start=1):
                 val_raw = df_input.at[idx, col_antigo_name]
                 cod_antigo = str(int(val_raw)).strip() if pd.notna(val_raw) and isinstance(val_raw, (int, float)) else str(val_raw).strip()
@@ -209,22 +215,21 @@ else:
                 obs = ""
 
                 try:
-                    # Sempre garante retornar à tela de produtos da empresa antes do filtro
                     if page.url != url_products:
                         page.goto(url_products, wait_until="domcontentloaded")
                         page.wait_for_timeout(1500)
 
-                    # A. Clica em 'Filtrar' (Vídeo 0:31)
+                    # A. Clicar em Filtrar
                     btn_filtrar = page.locator("button:has-text('Filtrar')").first
                     btn_filtrar.click(timeout=8000)
                     page.wait_for_timeout(600)
 
-                    # B. Clica em 'Código do Produto' (Vídeo 0:33)
+                    # B. Clicar em Código do Produto
                     opcao_codigo = page.locator("text=Código do Produto").first
                     opcao_codigo.click(timeout=8000)
                     page.wait_for_timeout(600)
 
-                    # C. Preenche o código antigo na caixa flutuante (Vídeo 0:34 - 0:37)
+                    # C. Preencher no modal
                     input_popup = page.locator("div[class*='popover'] input, div[class*='modal'] input, div[class*='filter'] input").first
                     if not input_popup.is_visible():
                         input_popup = page.locator("input").filter(has_not=page.locator("header input")).last
@@ -233,19 +238,19 @@ else:
                     input_popup.fill(cod_antigo)
                     page.wait_for_timeout(500)
 
-                    # D. Clica em 'Confirmar' (Vídeo 0:38)
+                    # D. Clicar em Confirmar
                     btn_confirmar = page.locator("button:has-text('Confirmar')").first
                     btn_confirmar.click(timeout=5000)
                     page.wait_for_timeout(2500)
 
-                    # E. Clica na linha correspondente na tabela (Vídeo 0:41 - 0:43)
+                    # E. Clicar no produto da tabela
                     linha_produto = page.locator(f"tr:has-text('{cod_antigo}'), tbody tr").first
 
                     if linha_produto.is_visible():
                         linha_produto.click(timeout=8000)
                         page.wait_for_timeout(2000)
 
-                        # F. Clica em 'Link original' e intercepta a nova aba (Vídeo 0:46 - 0:52)
+                        # F. Clicar em Link original e interceptar nova aba
                         with context.expect_page(timeout=12000) as new_page_info:
                             page.click("text=Link original", timeout=8000)
                         
@@ -253,7 +258,7 @@ else:
                         page_site.wait_for_load_state("domcontentloaded")
                         page_site.wait_for_timeout(2500)
 
-                        # G. Avaliação da variável global _productId no e-commerce (Vídeo 0:53 - 1:05)
+                        # G. Checagem do _productId no e-commerce
                         product_id_console = page_site.evaluate("""
                             () => {
                                 if (window._trustvox && Array.isArray(window._trustvox)) {
@@ -307,26 +312,29 @@ else:
             return df_input
 
     if btn_iniciar:
-        with st.spinner("Iniciando processamento no servidor..."):
-            df_final = rodar_validacao_online()
+        if not senha_trustvox:
+            st.warning("Preencha sua Senha do Trustvox na barra lateral.")
+        else:
+            with st.spinner("Iniciando processamento no servidor..."):
+                df_final = rodar_validacao_online()
 
-            status_box.success("🎉 Validação concluída com sucesso!")
+                status_box.success("🎉 Validação concluída com sucesso!")
 
-            nome_saida = f"relatorio_{slug_empresa}_online_validado.xlsx"
-            df_final.to_excel(nome_saida, index=False)
+                nome_saida = f"relatorio_{slug_empresa}_online_validado.xlsx"
+                df_final.to_excel(nome_saida, index=False)
 
-            with open(nome_saida, "rb") as file:
-                st.download_button(
-                    label="📥 Baixar Relatório Consolidado (Excel)",
-                    data=file,
-                    file_name=nome_saida,
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True
-                )
-            
-            colunas_exibicao = []
-            for col in ['Status Validação', col_antigo, col_novo, 'Observação Validação']:
-                if col not in colunas_exibicao:
-                    colunas_exibicao.append(col)
+                with open(nome_saida, "rb") as file:
+                    st.download_button(
+                        label="📥 Baixar Relatório Consolidado (Excel)",
+                        data=file,
+                        file_name=nome_saida,
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True
+                    )
+                
+                colunas_exibicao = []
+                for col in ['Status Validação', col_antigo, col_novo, 'Observação Validação']:
+                    if col not in colunas_exibicao:
+                        colunas_exibicao.append(col)
 
-            tabela_live.dataframe(df_final[colunas_exibicao], use_container_width=True)
+                tabela_live.dataframe(df_final[colunas_exibicao], use_container_width=True)

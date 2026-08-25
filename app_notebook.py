@@ -38,7 +38,7 @@ with st.sidebar:
 
     st.divider()
     st.subheader("🌐 Configuração de Conexão")
-    usar_proxy = st.checkbox("Ativar Proxy de Saída (Não Recomendado no Streamlit Cloud)", value=False)
+    usar_proxy = st.checkbox("Ativar Proxy de Saída", value=False)
     proxy_ip_porta = st.text_input("IP:Porta do Proxy:", value="64.137.96.74:6641")
     proxy_user = st.text_input("Usuário do Proxy:", value="mxjcpfer")
     proxy_pass = st.text_input("Senha do Proxy:", type="password", value="f080q5vj4ys9")
@@ -135,36 +135,38 @@ else:
         url_products = f"https://app.trustvox.com.br/{slug_empresa}/products"
 
         with sync_playwright() as p:
-            status_box.info("🌐 Inicializando navegador Chromium...")
+            status_box.info("🌐 Inicializando Chromium no servidor...")
 
-            launch_options = {
-                "headless": True,
-                "timeout": 30000,
-                "args": [
+            # O launch roda 100% limpo sem passar argumentos de proxy
+            browser = p.chromium.launch(
+                headless=True,
+                timeout=30000,
+                args=[
                     "--no-sandbox",
                     "--disable-setuid-sandbox",
                     "--disable-dev-shm-usage",
                     "--disable-gpu"
                 ]
+            )
+
+            context_kwargs = {
+                "viewport": {"width": 1920, "height": 1080},
+                "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             }
 
+            # Aplica o Proxy no Contexto apenas se a caixinha estiver marcada
             if usar_proxy and proxy_ip_porta:
-                launch_options["proxy"] = {
+                context_kwargs["proxy"] = {
                     "server": f"http://{proxy_ip_porta.strip()}",
                     "username": proxy_user.strip(),
                     "password": proxy_pass.strip()
                 }
 
-            browser = p.chromium.launch(**launch_options)
-
-            context = browser.new_context(
-                viewport={"width": 1920, "height": 1080},
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            )
+            context = browser.new_context(**context_kwargs)
             page = context.new_page()
 
             # -------------------------------------------------------------
-            # ETAPA DE LOGIN REAL (Conforme vídeo)
+            # ETAPA DE LOGIN REAL (Conforme gravado no vídeo)
             # -------------------------------------------------------------
             try:
                 status_box.info(f"🔑 Carregando formulário de login e digitando {email_trustvox}...")

@@ -1,19 +1,10 @@
-import os
-import sys
-import subprocess
 import pandas as pd
+import requests
 import streamlit as st
-
-try:
-    from playwright.sync_api import sync_playwright
-except ImportError:
-    subprocess.run([sys.executable, "-m", "pip", "install", "playwright"])
-    subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"])
-    from playwright.sync_api import sync_playwright
 
 st.set_page_config(page_title="Trustvox Studio Online", page_icon="🛡️", layout="wide")
 
-st.title("🛡️ Trustvox Migration Studio — Execução Online com Login")
+st.title("🛡️ Trustvox Migration Studio — Execução Online")
 
 with st.sidebar:
     st.title("🔑 Credenciais Trustvox")
@@ -53,7 +44,7 @@ if arquivo_enviado and slug_empresa:
     progress_bar = st.progress(0)
     log_box = st.container(height=300)
 
-    def rodar_validacao_sync():
+    def rodar_validacao_http():
         df_input['Status Validação'] = 'Não Testado'
         df_input['Observação'] = '-'
 
@@ -61,107 +52,83 @@ if arquivo_enviado and slug_empresa:
         aprovados_count = 0
         reprovados_count = 0
 
-        url_login = f"https://app.trustvox.com.br/empresas/{slug_empresa}/produtos"
+        session = requests.Session()
+        session.headers.update({
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        })
 
-        with sync_playwright() as p:
-            launch_kwargs = {
-                "headless": True,
-                "args": ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
+        if usar_proxy and proxy_ip_porta:
+            proxy_url = f"http://{proxy_user.strip()}:{proxy_pass.strip()}@{proxy_ip_porta.strip()}"
+            session.proxies = {
+                "http": proxy_url,
+                "https": proxy_url
             }
 
-            if usar_proxy and proxy_ip_porta:
-                launch_kwargs["proxy"] = {
-                    "server": f"http://{proxy_ip_porta.strip()}",
-                    "username": proxy_user.strip(),
-                    "password": proxy_pass.strip()
-                }
+        status_box.info("🌐 Conectando e autenticando via HTTP Session...")
 
-            browser = p.chromium.launch(**launch_kwargs)
-            context = browser.new_context()
-            page = context.new_page()
-
-            status_box.info("🌐 Conectando à Trustvox...")
+        # 1. Autenticação na Trustvox
+        login_url = "https://app.trustvox.com.br/auth/login"
+        try:
+            res_page = session.get(login_url, timeout=20)
+            payload = {
+                "email": email_trustvox,
+                "password": senha_trustvox
+            }
+            res_login = session.post(login_url, data=payload, timeout=20)
             
-            try:
-                page.goto(url_login, wait_until="domcontentloaded", timeout=35000)
-                page.wait_for_timeout(2000)
-
-                if "login" in page.url or page.locator("input[name='email']").is_visible():
-                    page.fill("input[name='email']", email_trustvox)
-                    page.fill("input[name='password']", senha_trustvox)
-                    page.click("button[type='submit']")
-                    page.wait_for_timeout(4000)
-
-                if "login" in page.url:
-                    status_box.error("❌ Falha na autenticação: Verifique credenciais ou o Proxy.")
-                    browser.close()
-                    return df_input
-
-                status_box.success("🎉 Autenticado com sucesso!")
-
-            except Exception as e:
-                status_box.error(f"Erro ao conectar: {e}")
-                browser.close()
+            if res_login.status_code != 200 and "login" in res_login.url:
+                status_box.error("❌ Falha na autenticação HTTP. Verifique credenciais ou o Proxy.")
                 return df_input
-
-            url_loja = f"https://app.trustvox.com.br/{slug_empresa}/products"
-
-            for idx in range(total_rows):
-                val_antigo = str(df_input.at[idx, col_antigo]).strip()
-                val_novo = str(df_input.at[idx, col_novo]).strip()
-                linha_excel = idx + 2
-
-                status_val = "REPROVADO"
-                obs = ""
-
-                try:
-                    page.goto(url_loja, wait_until="domcontentloaded")
-                    page.wait_for_timeout(1000)
-
-                    btn_filtrar = page.locator("button:has-text('Filtrar')").first
-                    btn_filtrar.click(timeout=6000)
-
-                    opcao_codigo = page.locator("text=Código do Produto").first
-                    opcao_codigo.click(timeout=6000)
-
-                    input_popup = page.locator("div[class*='popover'] input, div[class*='filter'] input").first
-                    input_popup.fill(val_antigo)
-
-                    btn_confirmar = page.locator("button:has-text('Confirmar')").first
-                    btn_confirmar.click(timeout=6000)
-                    page.wait_for_timeout(2000)
-
-                    page_content = page.content()
-                    if val_antigo in page_content or val_novo in page_content:
-                        status_val = "APROVADO"
-                        obs = "Código localizado"
-                    else:
-                        obs = f"Código {val_antigo} não localizado"
-
-                except Exception as err:
-                    obs = f"Falha na busca: {str(err)}"
-
-                if status_val == "APROVADO":
-                    aprovados_count += 1
-                    log_box.success(f"Linha {linha_excel} | ID {val_antigo} ➔ {val_novo} | ✅ APROVADO")
-                else:
-                    reprovados_count += 1
-                    log_box.error(f"Linha {linha_excel} | ID {val_antigo} ➔ {val_novo} | ❌ REPROVADO ({obs})")
-
-                df_input.at[idx, 'Status Validação'] = status_val
-                df_input.at[idx, 'Observação'] = obs
-
-                progress_bar.progress((idx + 1) / total_rows)
-
-            browser.close()
+            
+            status_box.success("🎉 Autenticado com sucesso via sessão leve!")
+        except Exception as e:
+            status_box.error(f"Erro de conexão no login: {e}")
             return df_input
+
+        # 2. Varredura da Planilha
+        url_busca_base = f"https://app.trustvox.com.br/{slug_empresa}/products"
+
+        for idx in range(total_rows):
+            val_antigo = str(df_input.at[idx, col_antigo]).strip()
+            val_novo = str(df_input.at[idx, col_novo]).strip()
+            linha_excel = idx + 2
+
+            status_val = "REPROVADO"
+            obs = ""
+
+            try:
+                params = {"search": val_antigo}
+                res = session.get(url_busca_base, params=params, timeout=15)
+                
+                if res.status_code == 200 and (val_antigo in res.text or val_novo in res.text):
+                    status_val = "APROVADO"
+                    obs = "Código localizado nos dados da página"
+                else:
+                    obs = f"Código {val_antigo} não localizado na busca"
+
+            except Exception as err:
+                obs = f"Falha na requisição: {str(err)}"
+
+            if status_val == "APROVADO":
+                aprovados_count += 1
+                log_box.success(f"Linha {linha_excel} | ID {val_antigo} ➔ {val_novo} | ✅ APROVADO")
+            else:
+                reprovados_count += 1
+                log_box.error(f"Linha {linha_excel} | ID {val_antigo} ➔ {val_novo} | ❌ REPROVADO ({obs})")
+
+            df_input.at[idx, 'Status Validação'] = status_val
+            df_input.at[idx, 'Observação'] = obs
+
+            progress_bar.progress((idx + 1) / total_rows)
+
+        return df_input
 
     if btn_iniciar:
         if not email_trustvox or not senha_trustvox:
             st.warning("Preencha seu E-mail e Senha na barra lateral.")
         else:
-            with st.spinner("Executando validação síncrona no Chromium..."):
-                df_final = rodar_validacao_sync()
+            with st.spinner("Executando validação via sessão leve HTTP..."):
+                df_final = rodar_validacao_http()
 
             status_box.success("🎉 Validação concluída!")
             nome_saida = f"relatorio_{slug_empresa}_online.xlsx"

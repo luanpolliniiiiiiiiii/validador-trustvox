@@ -28,7 +28,14 @@ st.markdown("""
 with st.sidebar:
     st.title("📚 Fontes & Empresa")
     
-    email_trustvox = st.text_input("E-mail Trustvox:", value="luan.araujo@reclameaqui.com.br")
+    st.subheader("🔑 Credenciais Trustvox")
+    col_usr, col_dom = st.columns([1.3, 1.7])
+    with col_usr:
+        user_email = st.text_input("E-mail:", value="luan.araujo")
+    with col_dom:
+        dom_email = st.text_input("Domínio:", value="@reclameaqui.com.br", disabled=True)
+    
+    email_trustvox = f"{user_email.strip()}{dom_email.strip()}"
     senha_trustvox = st.text_input("Senha Trustvox:", type="password")
     
     slug_empresa = st.text_input(
@@ -158,17 +165,20 @@ else:
         aprovados_count = 0
         reprovados_count = 0
 
-        url_base = f"https://app.trustvox.com.br/{slug_empresa}/products"
+        # URL exata para listagem de produtos conforme requisitado
+        url_products = f"https://app.trustvox.com.br/{slug_empresa}/products"
+        url_login = "https://app.trustvox.com.br/auth/login"
 
-        status_box.info("🌐 Inicializando Chromium no servidor...")
+        status_box.info("🌐 Inicializando navegador Chromium via Proxy...")
         driver = criar_driver_online()
-        wait = WebDriverWait(driver, 10)
+        wait = WebDriverWait(driver, 15)
 
         try:
-            status_box.info("🔑 Realizando autenticação na Trustvox...")
-            driver.get(url_base)
+            status_box.info("🔑 Acessando tela de login do Trustvox...")
+            driver.get(url_login)
             time.sleep(3)
 
+            # Preenchimento de credenciais (Vídeo 0:00 - 0:15)
             if "login" in driver.current_url or len(driver.find_elements(By.NAME, "email")) > 0:
                 campo_email = wait.until(EC.presence_of_element_located((By.NAME, "email")))
                 campo_senha = driver.find_element(By.NAME, "password")
@@ -182,7 +192,20 @@ else:
                 btn_entrar.click()
                 time.sleep(4)
 
-            status_box.info(f"🚀 Iniciando validação dos produtos da empresa {slug_empresa}...")
+            # Seleção da Empresa se cair em company-selection (Vídeo 0:16 - 0:21)
+            if "company-selection" in driver.current_url or "company_selection" in driver.current_url:
+                try:
+                    inp_search_company = wait.until(EC.presence_of_element_located((By.XPATH, "//input[contains(@placeholder, 'empresa') or @type='text']")))
+                    inp_search_company.send_keys(slug_empresa)
+                    time.sleep(1)
+
+                    opcao_empresa = wait.until(EC.element_to_be_clickable((By.XPATH, f"//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '{slug_empresa}')]")))
+                    opcao_empresa.click()
+                    time.sleep(3)
+                except Exception:
+                    pass
+
+            status_box.info(f"🚀 Acessando {url_products}...")
 
         except Exception as login_err:
             status_box.error(f"Falha de autenticação/conexão: {login_err}")
@@ -201,87 +224,79 @@ else:
             obs = ""
 
             try:
-                driver.get(url_base)
-                time.sleep(1.5)
+                driver.get(url_products)
+                time.sleep(2)
 
-                # Tenta simular o filtro do modal
-                try:
-                    btn_filtrar = driver.find_element(By.XPATH, "//button[contains(., 'Filtrar')]")
-                    driver.execute_script("arguments[0].click();", btn_filtrar)
-                    time.sleep(0.5)
+                # 1. Clica no botão 'Filtrar' (Vídeo 0:31)
+                btn_filtrar = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'Filtrar')]")))
+                driver.execute_script("arguments[0].click();", btn_filtrar)
+                time.sleep(0.8)
 
-                    opcao_codigo = driver.find_element(By.XPATH, "//*[contains(text(), 'Código do Produto')]")
-                    driver.execute_script("arguments[0].click();", opcao_codigo)
-                    time.sleep(0.5)
+                # 2. Clica em 'Código do Produto' (Vídeo 0:33)
+                opcao_codigo = wait.until(EC.element_to_be_clickable((By.XPATH, "//*[contains(text(), 'Código do Produto')]")))
+                driver.execute_script("arguments[0].click();", opcao_codigo)
+                time.sleep(0.8)
 
-                    inputs = driver.find_elements(By.CSS_SELECTOR, "div[class*='popover'] input, div[class*='modal'] input, div[class*='filter'] input")
-                    if inputs:
-                        input_popup = inputs[0]
-                        input_popup.click()
-                        input_popup.send_keys(Keys.CONTROL + "a")
-                        input_popup.send_keys(Keys.DELETE)
-                        input_popup.send_keys(cod_antigo)
-                        time.sleep(0.4)
+                # 3. Digita o código antigo na caixa flutuante (Vídeo 0:34 - 0:37)
+                campo_input = wait.until(EC.presence_of_element_located((By.XPATH, "//div[contains(@class, 'popover') or contains(@class, 'modal') or contains(@class, 'filter')]//input | //input[not(@type='hidden')]")))
+                campo_input.click()
+                campo_input.send_keys(Keys.CONTROL + "a")
+                campo_input.send_keys(Keys.DELETE)
+                campo_input.send_keys(cod_antigo)
+                time.sleep(0.5)
 
-                        btn_confirmar = driver.find_element(By.XPATH, "//button[contains(., 'Confirmar')]")
-                        driver.execute_script("arguments[0].click();", btn_confirmar)
-                        time.sleep(2)
-                except Exception:
-                    pass
+                # 4. Clica no botão 'Confirmar' (Vídeo 0:38)
+                btn_confirmar = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(., 'Confirmar')]")))
+                driver.execute_script("arguments[0].click();", btn_confirmar)
+                time.sleep(2.5)
 
-                # Verifica se o código antigo está na tabela filtrada ou visível na página
-                linhas_tabela = driver.find_elements(By.XPATH, f"//tr[contains(., '{cod_antigo}')] | //tbody/tr")
+                # 5. Clica no produto retornado na tabela (Vídeo 0:41 - 0:43)
+                linha_prod = driver.find_elements(By.XPATH, f"//tr[contains(., '{cod_antigo}')] | //tbody/tr")
                 
-                if len(linhas_tabela) > 0 and cod_antigo in driver.page_source:
-                    try:
-                        driver.execute_script("arguments[0].click();", linhas_tabela[0])
-                        time.sleep(1.5)
+                if len(linha_prod) > 0:
+                    driver.execute_script("arguments[0].click();", linha_prod[0])
+                    time.sleep(2)
 
-                        janela_original = driver.current_window_handle
-                        btn_links = driver.find_elements(By.XPATH, "//*[contains(text(), 'Link original')]")
-                        
-                        if len(btn_links) > 0:
-                            driver.execute_script("arguments[0].click();", btn_links[0])
-                            time.sleep(2.5)
+                    # 6. Clicar em 'Link original' (Vídeo 0:46)
+                    janela_original = driver.current_window_handle
+                    btn_link = wait.until(EC.element_to_be_clickable((By.XPATH, "//*[contains(text(), 'Link original')]")))
+                    driver.execute_script("arguments[0].click();", btn_link)
+                    time.sleep(3)
 
-                            novas_janelas = [j for j in driver.window_handles if j != janela_original]
-                            if len(novas_janelas) > 0:
-                                driver.switch_to.window(novas_janelas[0])
+                    # Troca para a nova aba do e-commerce (Vídeo 0:47 - 0:52)
+                    novas_janelas = [j for j in driver.window_handles if j != janela_original]
+                    if len(novas_janelas) > 0:
+                        driver.switch_to.window(novas_janelas[0])
 
-                            product_id_console = driver.execute_script("""
-                                if (window._trustvox && Array.isArray(window._trustvox)) {
-                                    for (let item of window._trustvox) {
-                                        if (Array.isArray(item) && item[0] === '_productId') {
-                                            return String(item[1]);
-                                        }
-                                    }
+                    # Leitura no console JavaScript da página do e-commerce (Vídeo 0:53 - 1:05)
+                    product_id_console = driver.execute_script("""
+                        if (window._trustvox && Array.isArray(window._trustvox)) {
+                            for (let item of window._trustvox) {
+                                if (Array.isArray(item) && item[0] === '_productId') {
+                                    return String(item[1]);
                                 }
-                                if (window._trustvox && typeof window._trustvox === 'object') {
-                                    return String(window._trustvox._productId || window._trustvox.product_id || '');
-                                }
-                                return null;
-                            """)
+                            }
+                        }
+                        if (window._trustvox && typeof window._trustvox === 'object') {
+                            return String(window._trustvox._productId || window._trustvox.product_id || '');
+                        }
+                        return null;
+                    """)
 
-                            html_site = driver.page_source
+                    html_site = driver.page_source
 
-                            if len(novas_janelas) > 0:
-                                driver.close()
-                                driver.switch_to.window(janela_original)
+                    if len(novas_janelas) > 0:
+                        driver.close()
+                        driver.switch_to.window(janela_original)
 
-                            if product_id_console and str(product_id_console).strip() == cod_novo:
-                                status_val = "APROVADO"
-                                obs = f"_productId ({product_id_console}) verificado no site"
-                            elif cod_novo in html_site:
-                                status_val = "APROVADO"
-                                obs = "Código novo localizado no HTML da página"
-                            else:
-                                obs = f"Esperado: {cod_novo} | Retornado: {product_id_console}"
-                        else:
-                            status_val = "APROVADO"
-                            obs = f"Código {cod_antigo} localizado no Trustvox"
-                    except Exception:
+                    if product_id_console and str(product_id_console).strip() == cod_novo:
                         status_val = "APROVADO"
-                        obs = f"Código {cod_antigo} localizado no Trustvox"
+                        obs = f"_productId ({product_id_console}) verificado no site"
+                    elif cod_novo in html_site:
+                        status_val = "APROVADO"
+                        obs = "Código novo localizado no HTML da página"
+                    else:
+                        obs = f"Esperado: {cod_novo} | Retornado: {product_id_console}"
                 else:
                     obs = f"Código {cod_antigo} não encontrado na busca"
 

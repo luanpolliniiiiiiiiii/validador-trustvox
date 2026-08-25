@@ -135,57 +135,53 @@ else:
         url_products = f"https://app.trustvox.com.br/{slug_empresa}/products"
 
         with sync_playwright() as p:
-            status_box.info("🌐 Abrindo navegador Chromium com suporte a JavaScript...")
+            status_box.info("🌐 Inicializando navegador Chromium...")
 
             launch_options = {
                 "headless": True,
+                "timeout": 60000,
                 "args": [
                     "--no-sandbox",
                     "--disable-setuid-sandbox",
                     "--disable-dev-shm-usage",
                     "--disable-gpu",
-                    "--single-process"
+                    "--ignore-certificate-errors"
                 ]
             }
 
-            browser = p.chromium.launch(**launch_options)
-
-            context_args = {
-                "viewport": {"width": 1920, "height": 1080},
-                "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            }
-
             if usar_proxy and proxy_ip_porta:
-                context_args["proxy"] = {
+                launch_options["proxy"] = {
                     "server": f"http://{proxy_ip_porta.strip()}",
                     "username": proxy_user.strip(),
                     "password": proxy_pass.strip()
                 }
 
-            context = browser.new_context(**context_args)
+            browser = p.chromium.launch(**launch_options)
+
+            context = browser.new_context(
+                viewport={"width": 1920, "height": 1080},
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            )
             page = context.new_page()
 
             # -------------------------------------------------------------
-            # ETAPA DE LOGIN REAL (Conforme gravado no vídeo)
+            # ETAPA DE LOGIN REAL
             # -------------------------------------------------------------
             try:
-                status_box.info(f"🔑 Carregando página de login e digitando {email_trustvox}...")
-                page.goto(url_login, wait_until="networkidle", timeout=45000)
+                status_box.info(f"🔑 Acessando formulário de login e digitando {email_trustvox}...")
+                page.goto(url_login, wait_until="domcontentloaded", timeout=40000)
                 page.wait_for_timeout(2000)
 
-                # Preenche E-mail e Senha
-                page.locator("input[name='email']").fill(email_trustvox)
-                page.wait_for_timeout(500)
-                page.locator("input[name='password']").fill(senha_trustvox)
-                page.wait_for_timeout(500)
+                page.fill("input[name='email']", email_trustvox)
+                page.wait_for_timeout(400)
+                page.fill("input[name='password']", senha_trustvox)
+                page.wait_for_timeout(400)
 
-                status_box.info("🔑 Clicando em 'Entrar' e aguardando autenticação da sessão...")
+                status_box.info("🔑 Clicando em 'Entrar' e efetuando autenticação...")
                 page.click("button[type='submit']")
-                
-                # Aguarda transição do login
-                page.wait_for_timeout(6000)
+                page.wait_for_timeout(5000)
 
-                # Transição de seleção de empresa se houver (Vídeo 0:16 - 0:21)
+                # Transição no company-selection se necessário
                 if "company-selection" in page.url or "company_selection" in page.url or page.locator("input[placeholder*='empresa']").is_visible():
                     status_box.info(f"🏢 Selecionando a empresa '{slug_empresa}'...")
                     inp_company = page.locator("input[placeholder*='empresa'], input[type='text']").first
@@ -194,10 +190,10 @@ else:
 
                     opcao_empresa = page.locator(f"text={slug_empresa}").first
                     opcao_empresa.click()
-                    page.wait_for_timeout(4000)
+                    page.wait_for_timeout(3500)
 
-                status_box.info(f"🚀 Sessão autenticada! Acessando {url_products}...")
-                page.goto(url_products, wait_until="networkidle", timeout=30000)
+                status_box.info(f"🚀 Login confirmado! Acessando {url_products}...")
+                page.goto(url_products, wait_until="domcontentloaded", timeout=30000)
                 page.wait_for_timeout(2000)
 
             except Exception as login_err:
@@ -224,17 +220,17 @@ else:
                         page.goto(url_products, wait_until="domcontentloaded")
                         page.wait_for_timeout(1500)
 
-                    # 1. Clicar em Filtrar (Vídeo 0:31)
+                    # 1. Clicar em Filtrar
                     btn_filtrar = page.locator("button:has-text('Filtrar')").first
                     btn_filtrar.click(timeout=8000)
                     page.wait_for_timeout(800)
 
-                    # 2. Clicar em Código do Produto (Vídeo 0:33)
+                    # 2. Clicar em Código do Produto
                     opcao_codigo = page.locator("text=Código do Produto").first
                     opcao_codigo.click(timeout=8000)
                     page.wait_for_timeout(800)
 
-                    # 3. Digitar código na caixa flutuante (Vídeo 0:34 - 0:37)
+                    # 3. Preencher caixa flutuante do modal
                     input_popup = page.locator("div[class*='popover'] input, div[class*='modal'] input, div[class*='filter'] input").first
                     if not input_popup.is_visible():
                         input_popup = page.locator("input").filter(has_not=page.locator("header input")).last
@@ -243,19 +239,19 @@ else:
                     input_popup.fill(cod_antigo)
                     page.wait_for_timeout(600)
 
-                    # 4. Clicar em Confirmar (Vídeo 0:38)
+                    # 4. Clicar em Confirmar
                     btn_confirmar = page.locator("button:has-text('Confirmar')").first
                     btn_confirmar.click(timeout=5000)
                     page.wait_for_timeout(2500)
 
-                    # 5. Clicar no produto da tabela (Vídeo 0:41 - 0:43)
+                    # 5. Clicar no produto da tabela
                     linha_produto = page.locator(f"tr:has-text('{cod_antigo}'), tbody tr").first
 
                     if linha_produto.is_visible():
                         linha_produto.click(timeout=8000)
                         page.wait_for_timeout(2000)
 
-                        # 6. Clicar no botão 'Link original' (Vídeo 0:46)
+                        # 6. Clicar em 'Link original' e ler nova aba
                         with context.expect_page(timeout=12000) as new_page_info:
                             page.click("text=Link original", timeout=8000)
                         
@@ -263,7 +259,7 @@ else:
                         page_site.wait_for_load_state("domcontentloaded")
                         page_site.wait_for_timeout(2500)
 
-                        # 7. Ler _productId no console JS (Vídeo 0:53 - 1:05)
+                        # 7. Ler _productId no console JS
                         product_id_console = page_site.evaluate("""
                             () => {
                                 if (window._trustvox && Array.isArray(window._trustvox)) {
@@ -295,7 +291,7 @@ else:
                         obs = f"Código {cod_antigo} não encontrado na busca"
 
                 except Exception as e:
-                    obs = f"Falha no filtro/navegação: {str(e).splitlines()[0]}"
+                    obs = f"Falha no filtro: {str(e).splitlines()[0]}"
 
                 if status_val == "APROVADO":
                     aprovados_count += 1
@@ -320,7 +316,7 @@ else:
         if not senha_trustvox:
             st.warning("Preencha sua Senha do Trustvox na barra lateral.")
         else:
-            with st.spinner("Iniciando login e navegação real no navegador..."):
+            with st.spinner("Iniciando login e processamento no navegador..."):
                 df_final = rodar_validacao_real()
 
                 status_box.success("🎉 Validação concluída com sucesso!")
